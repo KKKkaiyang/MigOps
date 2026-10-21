@@ -9,6 +9,7 @@ __pycache__/
 code/frontend/node_modules/
 code/frontend/dist/
 code/frontend/.vite/
+*.tsbuildinfo
 
 # Environment
 .env
