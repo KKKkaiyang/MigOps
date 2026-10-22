@@ -4,9 +4,13 @@ from app.routers import (
     b03_data_migration,
     b04_task_migration,
     b05_data_check,
+    common_auth,
+    common_user,
 )
 
 all_routers = [
+    common_auth.router,
+    common_user.router,
     b01_space.router,
     b02_material.router,
     b03_data_migration.router,
