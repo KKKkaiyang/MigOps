@@ -11,5 +11,14 @@
 - 命名：`{module}-{purpose}`，如 `b04-task-import`。
 - 与 `tools/` 区别：skills 是「方法论 + 自动化流程」，tools 是「手动执行的脚本」。
 
+## 自动加载（重要）
+CodeBuddy Code 仅会自动加载 `.codebuddy/skills/` 下的技能，因此本目录作为**编写源**，通过软链映射到 `.codebuddy/skills/` 实现「进入项目即自动加载」：
+- 每个技能（含 `SKILL.md` 的子目录）在 `.codebuddy/skills/` 下建立相对软链 `../../skills/<name>`。
+- 新增技能后执行 `bash skills/link.sh` 即可重建全部软链（clone 后也需执行一次）。
+- 进入项目后用 `/skills` 命令可查看已加载的 Project skills。
+
 ## 状态
 - 暂未沉淀技能，待首个模块（b01）稳定后提取 `b01-scaffold`。
+
+## 已沉淀技能
+- **`frontend-dev`**：前端功能开发规范与标准流程（技术栈、命名、目录、视觉风格设计令牌 §4.2/6.4、Element Plus 主题对齐、列表+弹窗表单标准开发流程、交付自检清单）。当用户在 `code/frontend` 下新增/修改页面、组件、接口或需要遵循本项目视觉风格时触发。

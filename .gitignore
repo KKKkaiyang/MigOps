@@ -20,3 +20,6 @@ code/frontend/.vite/
 .DS_Store
 .idea/
 .vscode/
+
+# Agent 本地状态（技能通过 skills/ 目录纳入版本管理）
+.codebuddy/
