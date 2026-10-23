@@ -37,6 +37,29 @@ export interface SpaceMemberOut {
   role_name: string
 }
 
+/** 空间真实统计（空间概览页，后端 GET /b01/spaces/{id}/stats 聚合） */
+export interface SpaceStatsOut {
+  b02_material_count: number
+  b02_category_count: number
+  b03_scenario_count: number
+  b03_table_total: number
+  b03_metadata_stats: Record<string, number>
+  b03_full_sync_stats: Record<string, number>
+  b03_incr_sync_stats: Record<string, number>
+  b03_record_count: number
+  b04_scenario_count: number
+  b04_task_total: number
+  b04_migration_stats: Record<string, number>
+  b04_note_count: number
+  b04_view_count: number
+  b04_fixed_view_count: number
+  b06_tag_count: number
+  b06_manage_tag_count: number
+  b06_tech_tag_count: number
+  b07_edge_count: number
+  b07_workflow_count: number
+}
+
 /** 统一分页结构（所有列表接口共用） */
 export interface PageData<T> {
   list: T[]

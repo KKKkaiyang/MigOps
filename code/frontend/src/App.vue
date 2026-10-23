@@ -22,6 +22,7 @@
               <el-dropdown-item disabled>
                 <span class="menu-meta">{{ user.username }}</span>
               </el-dropdown-item>
+              <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
               <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -32,15 +33,19 @@
       <router-view />
     </main>
   </div>
+
+  <!-- 用户自助修改密码（复用共用改密组件，自愿模式） -->
+  <ChangePasswordDialog v-model="pwdVisible" />
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 import { logout as logoutApi } from '@/api/auth'
+import ChangePasswordDialog from '@/components/common/ChangePasswordDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -51,8 +56,13 @@ const isLoginPage = computed(() => route.name === 'login')
 
 const user = computed(() => userStore.user)
 const isL0 = computed(() => userStore.isL0)
+const pwdVisible = ref(false)
 
 async function onCommand(command: string) {
+  if (command === 'change-password') {
+    pwdVisible.value = true
+    return
+  }
   if (command === 'logout') {
     await ElMessageBox.confirm('确认退出登录？', '提示', {
       type: 'warning',

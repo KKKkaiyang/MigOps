@@ -31,6 +31,31 @@ export interface TaskScenarioOut {
   created_at?: string
 }
 
+/** 标签（空间级） */
+export interface TagOut {
+  id: number
+  tag_name: string
+  tag_description?: string | null
+  /** 标签分类：管理标签 / 技术标签 */
+  tag_category: string
+  color: string
+  /** 后端聚合：已关联任务数 */
+  task_count: number
+  created_by?: string | null
+  created_at?: string
+}
+
+/** 标签分类枚举 */
+export const TAG_CATEGORIES = ['技术标签', '管理标签'] as const
+export type TagCategory = (typeof TAG_CATEGORIES)[number]
+
+/** 任务上的精简标签（用于列表/详情展示） */
+export interface TaskTagBrief {
+  id: number
+  name: string
+  color: string
+}
+
 /** 任务台账 */
 export interface TaskOut {
   id: number
@@ -46,6 +71,7 @@ export interface TaskOut {
   input_tables?: string | null
   output_tables?: string | null
   latest_note?: string | null
+  tags?: TaskTagBrief[]
   updated_by?: string | null
   updated_at?: string | null
 }
@@ -68,11 +94,25 @@ export interface SavedViewOut {
   scenario_id: number
   name: string
   description?: string | null
-  filter_config: Record<string, string>
+  filter_config: Record<string, unknown>
+  /** 视图模式：dynamic=动态引用; fixed=固化台账(锁定成员) */
+  view_mode: 'dynamic' | 'fixed' | string
   /** 后端聚合：命中任务数 */
   task_count: number
   created_by?: string | null
   created_at?: string
+}
+
+/** 台账模式通俗化标签（交互评审 I5：避免向用户暴露 view_mode 实现术语） */
+export const VIEW_MODE_LABEL: Record<string, string> = {
+  dynamic: '自动更新',
+  fixed: '固定名单',
+}
+
+/** 台账模式通俗化说明（创建引导与详情提示共用） */
+export const VIEW_MODE_NOTE: Record<string, string> = {
+  dynamic: '名单随筛选条件实时变化：任务改标签/状态后自动移出或加入',
+  fixed: '保存时锁定当前任务名单，之后任务变化不影响成员；状态变更仍回写原任务',
 }
 
 /** 状态机：当前状态 → 可流转目标（与后端 TASK_STATUS_TRANSITIONS 对齐） */

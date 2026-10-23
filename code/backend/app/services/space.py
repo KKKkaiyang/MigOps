@@ -15,6 +15,7 @@ from app.core.deps import (
 )
 from app.core.exceptions import BizError, ForbiddenError, NotFoundError
 from app.database import (
+    drop_space_database,
     ensure_space_tables,
     get_space_engine,
     space_db_name,
@@ -23,11 +24,13 @@ from app.models.role import ROLE_LEVEL_NAMES, CommonUserRole
 from app.models.space import (
     SPACE_CODE_PATTERN,
     SPACE_STATUS_ACCEPTED,
+    SPACE_STATUS_DELETED,
     SPACE_STATUS_DELIVERING,
     SPACE_STATUS_INIT,
     SPACE_STATUS_TRANSITIONS,
     SPACE_STATUSES,
     MigSpace,
+    SpaceDeleteLog,
 )
 from app.models.user import USER_STATUS_ENABLED, CommonUser
 from app.schemas.space import SpaceCreate, SpaceUpdate
@@ -206,6 +209,49 @@ def change_status(db: Session, space_id: int, status: str, operator: str) -> Mig
     obj.status = status
     obj.updated_by = operator
     obj.updated_at = datetime.now()
+    db.commit()
+    db.refresh(obj)
+    return obj
+
+
+def delete_space(db: Session, space_id: int, operator: str) -> MigSpace:
+    """物理删除项目空间（仅 L0 可调用，路由层 require_l0 已拦截）。
+
+    执行顺序：
+    1. 物理销毁空间业务库（DROP DATABASE）。失败则中止，不标记元数据，保持状态一致。
+    2. 逻辑标记公共库元数据（deleted_at + status=已删除），保留用于审计追溯。
+    3. 写删除审计日志（空间库已销毁，审计留存公共库）。
+    """
+    obj = get_space(db, space_id)  # 不存在或已删除 → NotFoundError
+    db_name = obj.db_name
+    space_code = obj.space_code
+    space_name = obj.space_name
+
+    # 1) 物理销毁空间业务库（失败即中止，不标记元数据）
+    try:
+        drop_space_database(db_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("空间 %s 数据库删除失败: %s", space_code, exc)
+        raise BizError("空间数据库删除失败，请确认数据库实例状态后重试")
+
+    # 2) 逻辑标记公共库元数据（保留，便于审计追溯）
+    now = datetime.now()
+    obj.status = SPACE_STATUS_DELETED
+    obj.deleted_at = now
+    obj.updated_by = operator
+    obj.updated_at = now
+
+    # 3) 写删除审计（空间库已销毁，审计留存公共库）
+    db.add(
+        SpaceDeleteLog(
+            space_id=obj.id,
+            space_name=space_name,
+            space_code=space_code,
+            db_name=db_name,
+            operator=operator,
+            created_at=now,
+        )
+    )
     db.commit()
     db.refresh(obj)
     return obj

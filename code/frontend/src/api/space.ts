@@ -1,5 +1,5 @@
 import http from './request'
-import type { PageData, SpaceMemberOut, SpaceOut, SpaceStatus } from '@/types'
+import type { PageData, SpaceMemberOut, SpaceOut, SpaceStatsOut, SpaceStatus } from '@/types'
 
 /** 项目空间列表（L0 看全部；其他人仅看已绑定的空间） */
 export function listSpaces(page = 1, page_size = 20, keyword?: string, status?: string) {
@@ -73,6 +73,22 @@ export function listMembers(id: number) {
 export function getSpace(id: number) {
   return http<SpaceOut>({
     url: `/b01/spaces/${id}`,
+    method: 'GET',
+  })
+}
+
+/** 物理删除项目空间（仅系统管理员）：直接 DROP 空间数据库，元数据逻辑保留 */
+export function deleteSpace(id: number) {
+  return http<null>({
+    url: `/b01/spaces/${id}`,
+    method: 'DELETE',
+  })
+}
+
+/** 空间真实统计（b02/b03/b04/b06/b07 计数与状态分布，供空间概览页） */
+export function getSpaceStats(id: number) {
+  return http<SpaceStatsOut>({
+    url: `/b01/spaces/${id}/stats`,
     method: 'GET',
   })
 }

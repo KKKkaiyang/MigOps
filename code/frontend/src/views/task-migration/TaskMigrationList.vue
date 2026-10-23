@@ -1,35 +1,41 @@
 <template>
-  <!-- 任务迁移管理（b04）：任务台账全生命周期（需求 §6） -->
+  <!-- 任务迁移管理（b04）：任务列表（场景上下文由空间头切换器维护，交互评审 I1/I2） -->
   <div class="tm-page">
     <el-card shadow="never">
       <template #header>
         <div class="page-head">
-          <span class="page-title">任务迁移管理</span>
+          <span class="page-title">
+            任务迁移
+            <span v-if="scenario" class="page-scenario">{{ scenario.name }}</span>
+          </span>
           <div class="head-actions">
             <el-button :disabled="!scenarioId" @click="importVisible = true">导入任务台账</el-button>
             <el-button :disabled="!scenarioId" @click="exportTasks">导出</el-button>
             <el-button :disabled="!scenarioId" @click="openSaveView">保存为台账</el-button>
+            <el-button :disabled="!scenarioId || selection.length === 0" @click="createFromTasksVisible = true">
+              创建台账（{{ selection.length }}）
+            </el-button>
+            <el-button :disabled="!scenarioId || selection.length === 0" type="success" plain @click="addToLedgerVisible = true">
+              添加到台账（{{ selection.length }}）
+            </el-button>
           </div>
         </div>
       </template>
 
-      <ScenarioBar
-        :scenarios="scenarios"
-        :scenario-id="scenarioId"
-        :saved-views="savedViews"
-        :space-id="spaceId"
-        @change="onScenarioChange"
-        @create="scenarioVisible = true"
-        @delete="removeScenario"
-      />
-
       <template v-if="scenarioId">
-        <TaskFilterBar :filters="filters" @update="onFilterUpdate" @search="search" @reset="resetFilters" />
+        <TaskFilterBar
+          :filters="filters"
+          :tags="allTags"
+          @update="onFilterUpdate"
+          @search="search"
+          @reset="resetFilters"
+        />
 
         <!-- 批量操作栏 -->
         <div v-if="selection.length" class="batch-bar">
           <span>已选 {{ selection.length }} 条</span>
           <el-button size="small" type="primary" @click="batchVisible = true">批量流转状态</el-button>
+          <el-button size="small" type="primary" @click="batchTagVisible = true">批量打标签</el-button>
           <el-button size="small" @click="clearSelection">清除选择</el-button>
         </div>
 
@@ -72,8 +78,17 @@
               <CheckStatusTag :status="row.check_status" />
             </template>
           </el-table-column>
-          <el-table-column label="最新备注" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.latest_note || '—' }}</template>
+          <el-table-column label="标签" min-width="180">
+            <template #default="{ row }">
+              <TaskTagCell
+                :tags="row.tags || []"
+                :all-tags="allTags"
+                :space-id="spaceId"
+                :task-id="row.id"
+                editable
+                @updated="load"
+              />
+            </template>
           </el-table-column>
           <el-table-column label="更新时间" width="150">
             <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
@@ -98,10 +113,9 @@
         />
       </template>
 
-      <el-empty v-else description="请先选择或创建迁移场景" />
+      <el-empty v-else description="请先在空间头部选择或创建迁移场景" />
     </el-card>
 
-    <ScenarioDialog v-model="scenarioVisible" @success="onScenarioCreated" />
     <BatchStatusDialog
       v-model="batchVisible"
       :scenario-id="scenarioId ?? 0"
@@ -115,42 +129,60 @@
       :filters="activeFilters"
       @success="onViewSaved"
     />
+    <SaveViewDialog
+      v-model="createFromTasksVisible"
+      :scenario-id="scenarioId ?? 0"
+      :task-ids="selection.map((s) => s.id)"
+      @success="onCreatedFromTasks"
+    />
+    <AddToLedgerDialog
+      v-model="addToLedgerVisible"
+      :scenario-id="scenarioId ?? 0"
+      :task-ids="selection.map((s) => s.id)"
+      @success="onAddedToLedger"
+    />
     <ImportDialog v-model="importVisible" :scenario-id="scenarioId ?? 0" @success="load" />
+    <BatchTagDialog
+      v-model="batchTagVisible"
+      :scenario-id="scenarioId ?? 0"
+      :ids="selection.map((s) => s.id)"
+      @success="onBatchTagDone"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import ScheduleStatusTag from '@/components/common/ScheduleStatusTag.vue'
 import CheckStatusTag from '@/components/common/CheckStatusTag.vue'
-import ScenarioBar from './components/ScenarioBar.vue'
 import TaskFilterBar from './components/TaskFilterBar.vue'
 import TaskStatusCell from './components/TaskStatusCell.vue'
-import ScenarioDialog from './components/ScenarioDialog.vue'
 import BatchStatusDialog from './components/BatchStatusDialog.vue'
 import TaskDetailDrawer from './components/TaskDetailDrawer.vue'
 import SaveViewDialog from './components/SaveViewDialog.vue'
 import ImportDialog from './components/ImportDialog.vue'
-import {
-  batchUpdateTaskStatus,
-  deleteScenario,
-  listSavedViews,
-  listScenarios,
-  listTasks,
-  updateTaskStatus,
-} from '@/api/task-migration'
+import BatchTagDialog from './components/BatchTagDialog.vue'
+import TaskTagCell from './components/TaskTagCell.vue'
+import AddToLedgerDialog from './components/AddToLedgerDialog.vue'
+import { listTasks, updateTaskStatus } from '@/api/task-migration'
+import { useTagStore } from '@/store/tags'
+import { useScenarioStore } from '@/store/scenario'
 import { downloadFile } from '@/utils/download'
 import { formatTime } from '@/utils/format'
-import type { SavedViewOut, TaskOut, TaskScenarioOut } from '@/types'
+import type { TaskOut } from '@/types'
 
 const route = useRoute()
 const spaceId = computed(() => Number(route.params.spaceId))
 
-const scenarios = ref<TaskScenarioOut[]>([])
-const scenarioId = ref<number | null>(null)
-const savedViews = ref<SavedViewOut[]>([])
+/** 场景上下文：空间级 store 维护（跨导航保持，I2） */
+const scenarioStore = useScenarioStore()
+const scenario = computed(() => scenarioStore.b04)
+const scenarioId = computed(() => scenarioStore.b04?.id ?? null)
+
+const tagStore = useTagStore()
+const allTags = computed(() => tagStore.tags)
 
 const list = ref<TaskOut[]>([])
 const total = ref(0)
@@ -159,49 +191,58 @@ const pageSize = ref(20)
 const loading = ref(false)
 const selection = ref<TaskOut[]>([])
 
-const filters = ref<Record<string, string>>({
+interface TaskFilters {
+  keyword: string
+  workflow_name: string
+  migration_status: string
+  schedule_status: string
+  check_status: string
+  owner: string
+  tag_ids: number[]
+  tag_match: string
+}
+
+const filters = ref<TaskFilters>({
   keyword: '',
   workflow_name: '',
   migration_status: '',
   schedule_status: '',
   check_status: '',
   owner: '',
+  tag_ids: [],
+  tag_match: 'all',
 })
 
-const scenarioVisible = ref(false)
 const batchVisible = ref(false)
 const detailVisible = ref(false)
 const detailTask = ref<TaskOut | null>(null)
 const saveViewVisible = ref(false)
+const createFromTasksVisible = ref(false)
 const importVisible = ref(false)
+const batchTagVisible = ref(false)
+const addToLedgerVisible = ref(false)
 
 /** 当前生效的筛选条件（保存为台账时使用） */
-const activeFilters = computed(() => {
-  const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(filters.value)) {
-    if (v) out[k] = v
-  }
+const activeFilters = computed<Record<string, unknown>>(() => {
+  const f = filters.value
+  const out: Record<string, unknown> = {}
+  if (f.keyword) out.keyword = f.keyword
+  if (f.workflow_name) out.workflow_name = f.workflow_name
+  if (f.migration_status) out.migration_status = f.migration_status
+  if (f.schedule_status) out.schedule_status = f.schedule_status
+  if (f.check_status) out.check_status = f.check_status
+  if (f.owner) out.owner = f.owner
+  if (f.tag_ids.length) out.tag_ids = f.tag_ids
+  if (f.tag_match !== 'all') out.tag_match = f.tag_match
   return out
 })
 
-async function loadScenarios() {
-  scenarios.value = await listScenarios(spaceId.value)
-  if (!scenarioId.value && scenarios.value.length) {
-    scenarioId.value = scenarios.value[0].id
-  }
-  await loadSavedViews()
-}
-
-async function loadSavedViews() {
+async function load() {
   if (!scenarioId.value) {
-    savedViews.value = []
+    list.value = []
+    total.value = 0
     return
   }
-  savedViews.value = await listSavedViews(spaceId.value, scenarioId.value)
-}
-
-async function load() {
-  if (!scenarioId.value) return
   loading.value = true
   try {
     const data = await listTasks(spaceId.value, scenarioId.value, page.value, pageSize.value, {
@@ -211,6 +252,11 @@ async function load() {
       schedule_status: filters.value.schedule_status || undefined,
       check_status: filters.value.check_status || undefined,
       owner: filters.value.owner || undefined,
+      tag_ids:
+        Array.isArray(filters.value.tag_ids) && filters.value.tag_ids.length
+          ? (filters.value.tag_ids as number[])
+          : undefined,
+      tag_match: filters.value.tag_match !== 'all' ? (filters.value.tag_match as 'all' | 'any') : undefined,
     })
     list.value = data.list
     total.value = data.total
@@ -219,21 +265,8 @@ async function load() {
   }
 }
 
-function onScenarioChange(id: number) {
-  scenarioId.value = id
-  page.value = 1
-  clearSelection()
-  load()
-  loadSavedViews()
-}
-
-function onScenarioCreated(scenario: { id: number; name: string }) {
-  scenarioId.value = scenario.id
-  loadScenarios().then(load)
-}
-
-function onFilterUpdate(payload: { key: string; value: string }) {
-  filters.value[payload.key] = payload.value
+function onFilterUpdate(payload: { key: string; value: string | number[] }) {
+  ;(filters.value as Record<string, string | number[]>)[payload.key] = payload.value
 }
 
 function search() {
@@ -249,6 +282,8 @@ function resetFilters() {
     schedule_status: '',
     check_status: '',
     owner: '',
+    tag_ids: [],
+    tag_match: 'all',
   }
   search()
 }
@@ -274,6 +309,12 @@ function onBatchDone() {
   load()
 }
 
+function onBatchTagDone() {
+  batchTagVisible.value = false
+  clearSelection()
+  load()
+}
+
 function openDetail(row: TaskOut) {
   detailTask.value = row
   detailVisible.value = true
@@ -289,30 +330,49 @@ function openSaveView() {
 
 function onViewSaved() {
   saveViewVisible.value = false
-  loadSavedViews()
 }
 
-async function removeScenario() {
-  await ElMessageBox.confirm('删除场景将级联删除其下全部任务、备注与自定义台账，确认删除？', '删除场景', {
-    type: 'warning',
-  })
-  await deleteScenario(spaceId.value, scenarioId.value!)
-  ElMessage.success('场景已删除')
-  scenarioId.value = null
-  await loadScenarios()
+function onCreatedFromTasks() {
+  createFromTasksVisible.value = false
+  ElMessage.success('已基于勾选任务创建固定名单台账')
+  clearSelection()
+}
+
+/** 勾选任务加入已有台账（目标台账在对话框内选择） */
+function onAddedToLedger() {
+  addToLedgerVisible.value = false
+  clearSelection()
 }
 
 async function exportTasks() {
   const params: Record<string, unknown> = { space_id: spaceId.value }
-  for (const [k, v] of Object.entries(filters.value)) {
-    if (v) params[k] = v
-  }
+  const f = filters.value
+  if (f.keyword) params.keyword = f.keyword
+  if (f.workflow_name) params.workflow_name = f.workflow_name
+  if (f.migration_status) params.migration_status = f.migration_status
+  if (f.schedule_status) params.schedule_status = f.schedule_status
+  if (f.check_status) params.check_status = f.check_status
+  if (f.owner) params.owner = f.owner
+  // 标签维度纳入导出筛选，与列表查询保持一致
+  if (Array.isArray(f.tag_ids) && f.tag_ids.length) params.tag_ids = (f.tag_ids as number[]).join(',')
+  if (f.tag_match && f.tag_match !== 'all') params.tag_match = f.tag_match
   await downloadFile(`/b04/scenarios/${scenarioId.value}/tasks/export`, params, '任务台账.xlsx')
 }
 
+/** 场景切换（空间头切换器）→ 重置分页与选择并重载 */
+watch(
+  () => scenarioStore.b04,
+  () => {
+    page.value = 1
+    clearSelection()
+    load()
+  }
+)
+
 onMounted(async () => {
-  await loadScenarios()
-  if (scenarioId.value) await load()
+  await scenarioStore.ensureB04(spaceId.value)
+  await tagStore.ensure(spaceId.value)
+  await load()
 })
 </script>
 
@@ -327,6 +387,13 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.page-scenario {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-primary);
 }
 
 .head-actions {

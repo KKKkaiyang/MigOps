@@ -1,5 +1,5 @@
 <template>
-  <!-- 我的项目空间 Panel 区（需求 §3：概览页主体最上方） -->
+  <!-- 我的项目空间 Panel 区（概览页主体最上方；交互评审 I3：统一入口 + 行内管理操作） -->
   <section class="spaces-section">
     <div class="spaces-toolbar">
       <div class="spaces-title">
@@ -22,6 +22,14 @@
         </el-select>
         <el-button v-if="canCreate" type="primary" @click="formVisible = true">+ 创建迁移空间</el-button>
       </div>
+    </div>
+
+    <!-- 统计条（基于当前列表聚合） -->
+    <div class="stat-row">
+      <div class="stat-card"><div class="k">全部空间</div><div class="v">{{ total }}</div></div>
+      <div class="stat-card accent"><div class="k">交付中</div><div class="v">{{ statDelivering }}</div></div>
+      <div class="stat-card"><div class="k">我参与的空间</div><div class="v">{{ statMine }}</div></div>
+      <div class="stat-card"><div class="k">本周更新</div><div class="v">{{ statRecent }}</div></div>
     </div>
 
     <div v-loading="loading" class="panel-grid">
@@ -50,6 +58,10 @@
           <span class="meta-item">最近更新：{{ formatDate(s.updated_at) }}</span>
         </div>
         <div class="panel-foot">
+          <div class="foot-actions">
+            <el-button v-if="canManage(s)" link type="primary" size="small" @click="openEdit(s)">编辑</el-button>
+            <el-button v-if="canManage(s)" link type="primary" size="small" @click="openMembers(s)">成员</el-button>
+          </div>
           <el-button type="primary" size="small" @click="enterSpace(s.id)">进入空间</el-button>
         </div>
       </div>
@@ -62,6 +74,8 @@
     </div>
 
     <SpaceFormDialog v-model="formVisible" @success="load" />
+    <SpaceFormDialog v-model="editVisible" :space="editing" @success="load" />
+    <SpaceMemberDialog v-model="memberVisible" :space="managing" @changed="load" />
   </section>
 </template>
 
@@ -71,6 +85,7 @@ import { useRouter } from 'vue-router'
 import RoleLevelTag from '@/components/common/RoleLevelTag.vue'
 import SpaceStatusTag from '@/components/common/SpaceStatusTag.vue'
 import SpaceFormDialog from '@/views/space/components/SpaceFormDialog.vue'
+import SpaceMemberDialog from '@/views/space/components/SpaceMemberDialog.vue'
 import { listSpaces } from '@/api/space'
 import { useUserStore } from '@/store/user'
 import { formatDate } from '@/utils/format'
@@ -86,16 +101,38 @@ const status = ref('')
 const loading = ref(true)
 const formVisible = ref(false)
 
+/** 行内管理：编辑空间 / 成员管理（L0 全局或该空间 L1） */
+const editVisible = ref(false)
+const memberVisible = ref(false)
+const editing = ref<SpaceOut | null>(null)
+const managing = ref<SpaceOut | null>(null)
+
 /** 创建空间权限：L0 全局，或在任一空间担任 L1（与公共业务需求 §5.3 一致） */
 const canCreate = computed(
   () => userStore.isL0 || (userStore.user?.roles ?? []).some((r) => r.role_level === 'L1')
 )
+
+/** 行内管理权限：L0 或该空间的 L1 */
+function canManage(s: SpaceOut): boolean {
+  return userStore.isL0 || s.my_role === 'L1'
+}
 
 const emptyText = computed(() =>
   canCreate.value
     ? '暂无项目空间，点击下方按钮创建第一个空间'
     : '暂无加入的空间，请联系项目管理员将您加入'
 )
+
+/** 统计条：基于当前列表聚合 */
+const statDelivering = computed(() => list.value.filter((s) => s.status === '交付中').length)
+const statMine = computed(() => list.value.filter((s) => !!s.my_role).length)
+const statRecent = computed(() => {
+  const weekAgo = Date.now() - 7 * 24 * 3600 * 1000
+  return list.value.filter((s) => {
+    const t = s.updated_at ? new Date(s.updated_at).getTime() : 0
+    return t >= weekAgo
+  }).length
+})
 
 function routeLine(s: SpaceOut): string {
   if (!s.source_platform && !s.target_platform) return '源/目标平台未维护'
@@ -119,6 +156,16 @@ function onSearch() {
 
 function enterSpace(id: number) {
   router.push({ name: 'space-overview', params: { spaceId: id } })
+}
+
+function openEdit(s: SpaceOut) {
+  editing.value = s
+  editVisible.value = true
+}
+
+function openMembers(s: SpaceOut) {
+  managing.value = s
+  memberVisible.value = true
 }
 
 onMounted(load)
@@ -161,6 +208,37 @@ onMounted(load)
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ── 统计条 ── */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.stat-card {
+  border: 1px solid var(--color-border-light);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--color-surface);
+}
+
+.stat-card .k {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.stat-card .v {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-top: 2px;
+}
+
+.stat-card.accent .v {
+  color: var(--color-primary);
 }
 
 .panel-grid {
@@ -282,8 +360,14 @@ onMounted(load)
 
 .panel-foot {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   margin-top: 2px;
+}
+
+.foot-actions {
+  display: flex;
+  gap: 4px;
 }
 
 .panel-empty {

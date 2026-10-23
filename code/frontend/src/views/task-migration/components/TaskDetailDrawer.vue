@@ -58,6 +58,20 @@
           </el-dropdown>
         </div>
 
+        <!-- 数据血缘联动（交互评审 I7：带任务上下文跳转血缘页预置检索） -->
+        <div class="lineage-row">
+          <span class="status-label">数据血缘：</span>
+          <el-button size="small" @click="viewLineage">查看血缘</el-button>
+          <span class="lineage-hint">在血缘图中检索该任务的上下游关联</span>
+        </div>
+
+        <!-- 标签编辑 -->
+        <div class="tag-row">
+          <span class="status-label">任务标签：</span>
+          <TaskTagSelect v-model="taskTags" placeholder="选择标签" style="flex: 1" />
+          <el-button size="small" type="primary" :loading="tagSaving" @click="saveTags">保存标签</el-button>
+        </div>
+
         <!-- 排查备注时间线 -->
         <div class="notes-section">
           <div class="notes-head">
@@ -100,14 +114,15 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ArrowDown } from '@element-plus/icons-vue'
 import TaskStatusTag from '@/components/common/TaskStatusTag.vue'
 import ScheduleStatusTag from '@/components/common/ScheduleStatusTag.vue'
 import CheckStatusTag from '@/components/common/CheckStatusTag.vue'
 import NoteFormDialog from './NoteFormDialog.vue'
-import { listNotes, updateTaskStatus } from '@/api/task-migration'
+import TaskTagSelect from './TaskTagSelect.vue'
+import { getTaskTags, listNotes, setTaskTags, updateTaskStatus } from '@/api/task-migration'
 import { formatTime } from '@/utils/format'
 import { TASK_STATUS_TRANSITIONS } from '@/types'
 import type { TaskNoteOut, TaskOut } from '@/types'
@@ -119,6 +134,7 @@ const emit = defineEmits<{
 }>()
 
 const route = useRoute()
+const router = useRouter()
 const spaceId = computed(() => Number(route.params.spaceId))
 
 const visible = computed({
@@ -129,6 +145,8 @@ const visible = computed({
 const loading = ref(false)
 const notes = ref<TaskNoteOut[]>([])
 const noteVisible = ref(false)
+const taskTags = ref<number[]>([])
+const tagSaving = ref(false)
 
 const nextStatuses = computed(() =>
   props.task ? (TASK_STATUS_TRANSITIONS[props.task.migration_status] ?? []) : []
@@ -146,6 +164,8 @@ async function load() {
   loading.value = true
   try {
     notes.value = await listNotes(spaceId.value, props.task.id)
+    const tags = await getTaskTags(spaceId.value, props.task.id)
+    taskTags.value = tags.map((t) => t.id)
   } finally {
     loading.value = false
   }
@@ -159,10 +179,40 @@ async function changeStatus(status: string) {
   visible.value = false
 }
 
+/** 取首个表名（逗号分隔列表）：优先输出表，其次输入表 */
+function firstTable(value?: string | null): string | null {
+  if (!value) return null
+  const t = value.split(',')[0]?.trim()
+  return t || null
+}
+
+/** 查看血缘：携带任务的输入输出表名跳入，由血缘页预置聚焦检索（交互评审 I7） */
+function viewLineage() {
+  if (!props.task) return
+  const table = firstTable(props.task.output_tables) || firstTable(props.task.input_tables)
+  router.push({
+    name: 'space-lineage',
+    params: { spaceId: spaceId.value },
+    query: table ? { table } : {},
+  })
+}
+
 async function onNoteAdded() {
   noteVisible.value = false
   await load()
   emit('changed')
+}
+
+async function saveTags() {
+  if (!props.task) return
+  tagSaving.value = true
+  try {
+    await setTaskTags(spaceId.value, props.task.id, taskTags.value)
+    ElMessage.success('标签已更新')
+    emit('changed')
+  } finally {
+    tagSaving.value = false
+  }
 }
 </script>
 
@@ -188,9 +238,28 @@ async function onNoteAdded() {
   margin-top: 14px;
 }
 
+.lineage-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.lineage-hint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
 .status-label {
   font-size: 13px;
   color: var(--color-text-regular);
+}
+
+.tag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
 }
 
 .notes-section {

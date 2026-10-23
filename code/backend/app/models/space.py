@@ -8,6 +8,8 @@ from app.models.base import Base
 SPACE_STATUS_INIT = "初始化"
 SPACE_STATUS_DELIVERING = "交付中"
 SPACE_STATUS_ACCEPTED = "已验收"
+# 物理删除后的归档状态（空间业务库已销毁，公共库元数据逻辑保留，便于审计追溯）
+SPACE_STATUS_DELETED = "已删除"
 SPACE_STATUSES = (
     SPACE_STATUS_INIT,
     SPACE_STATUS_DELIVERING,
@@ -52,3 +54,21 @@ class MigSpace(Base):
     updated_by = Column(String(64), comment="更新人")
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间")
     deleted_at = Column(DateTime, comment="逻辑删除时间")
+
+
+class SpaceDeleteLog(Base):
+    """空间物理删除审计日志。
+
+    空间业务库（mig_<space_code>_db）被 DROP 后不可恢复，故删除动作须落审计于公共库，
+    留存操作人、被删空间标识与被删库名快照，满足可追溯要求。
+    """
+
+    __tablename__ = "b01_space_delete_log"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
+    space_id = Column(BigInteger, comment="原空间 ID")
+    space_name = Column(String(128), comment="空间名称（删除时快照）")
+    space_code = Column(String(64), comment="空间编码（删除时快照）")
+    db_name = Column(String(128), comment="被删除的数据库名（删除时快照）")
+    operator = Column(String(64), comment="操作人（用户 ID / 用户名）")
+    created_at = Column(DateTime, default=datetime.now, comment="删除时间")

@@ -90,6 +90,27 @@ def create_space_database(space_code: str) -> str:
     return db_name
 
 
+# 物理删除时的库名安全校验：仅允许删除 mig_<code>_db 形态的空间库，杜绝误删公共库/其他库
+_SPACE_DB_RE = re.compile(r"^mig_[a-z][a-z0-9_]{1,30}_db$")
+
+
+def drop_space_database(db_name: str) -> None:
+    """物理删除空间数据库并清理引擎缓存。
+
+    仅接受 `mig_<space_code>_db` 形态的库名；校验不通过直接拒绝，避免误删其他库。
+    删除成功后驱逐 `_space_engines` 中对应缓存，防止后续重连已销毁的数据库。
+    """
+    if not _SPACE_DB_RE.match(db_name or ""):
+        raise ValueError(f"非法的空间数据库名，拒绝删除: {db_name}")
+    eng = _server_engine()
+    try:
+        with eng.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS `{db_name}`"))
+    finally:
+        eng.dispose()
+    _space_engines.pop(db_name, None)
+
+
 # ── 空间库引擎与建表 ──
 # 空间库与公共库同实例不同库（CODEBUDDY.md §8.4），复用同一连接配置，
 # 按库名缓存 engine，避免重复创建连接池。
@@ -118,8 +139,44 @@ def init_space_models(engine: Engine) -> None:
 def ensure_space_tables(space_code: str) -> str:
     """确保空间库存在且空间业务表就绪，返回库名。"""
     db_name = create_space_database(space_code)
-    init_space_models(get_space_engine(db_name))
+    engine = get_space_engine(db_name)
+    init_space_models(engine)
+    _apply_space_additive_migrations(engine)
     return db_name
+
+
+def _space_column_exists(conn, table: str, column: str) -> bool:
+    row = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"
+        ),
+        {"t": table, "c": column},
+    ).scalar()
+    return bool(row)
+
+
+def _apply_space_additive_migrations(engine: Engine) -> None:
+    """空间库增量 DDL：create_all 仅能建缺失表，不能加列。
+
+    当前无 Alembic，新增列（如 b04_saved_view.view_mode）在此以幂等方式补齐；
+    新表由 init_space_models 的 create_all 自动建好。
+    """
+    with engine.begin() as conn:
+        if not _space_column_exists(conn, "b04_saved_view", "view_mode"):
+            conn.execute(
+                text(
+                    "ALTER TABLE b04_saved_view ADD COLUMN view_mode "
+                    "VARCHAR(16) NOT NULL DEFAULT 'dynamic' COMMENT 'dynamic=动态引用;fixed=固化台账'"
+                )
+            )
+        if not _space_column_exists(conn, "b06_tag", "tag_category"):
+            conn.execute(
+                text(
+                    "ALTER TABLE b06_tag ADD COLUMN tag_category "
+                    "VARCHAR(16) NOT NULL DEFAULT '技术标签' COMMENT '标签分类: 管理标签 / 技术标签'"
+                )
+            )
 
 
 def init_models():

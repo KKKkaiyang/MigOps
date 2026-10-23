@@ -5,8 +5,11 @@ from typing import Optional
 from app.config import settings
 from app.core.deps import (
     get_current_user,
+    get_space_db,
     get_space_role,
+    require_l0,
     require_space_admin,
+    require_space_creator,
     require_space_member,
 )
 from app.core.response import PageData, ok
@@ -18,10 +21,12 @@ from app.schemas.space import (
     SpaceMemberIn,
     SpaceMemberRoleIn,
     SpaceOut,
+    SpaceStatsOut,
     SpaceStatusIn,
     SpaceUpdate,
 )
 from app.services import space as svc
+from app.services import space_stats as stats_svc
 
 router = APIRouter(prefix="/b01/spaces", tags=["b01-项目空间管理"])
 
@@ -30,10 +35,24 @@ router = APIRouter(prefix="/b01/spaces", tags=["b01-项目空间管理"])
 def create_space(
     payload: SpaceCreate,
     db: Session = Depends(get_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(require_space_creator),
 ):
     obj = svc.create_space(db, payload, operator=str(user.id))
     return ok(data=_to_out(db, obj, user), message="创建成功")
+
+
+@router.delete("/{space_id}")
+def delete_space(
+    space_id: int,
+    db: Session = Depends(get_db),
+    user: CommonUser = Depends(require_l0),
+):
+    """物理删除项目空间（仅系统管理员）：DROP 空间业务库，公共库元数据逻辑保留。
+
+    高危不可逆操作，需前端强确认（输入空间名）后调用；审计留痕于 b01_space_delete_log。
+    """
+    svc.delete_space(db, space_id, operator=str(user.id))
+    return ok(message="空间已删除")
 
 
 @router.get("")
@@ -90,6 +109,19 @@ def change_status(
     require_space_admin(db, user, space_id)
     obj = svc.change_status(db, space_id, payload.status, operator=str(user.id))
     return ok(data=_to_out(db, obj, user), message="状态已更新")
+
+
+@router.get("/{space_id}/stats")
+def space_stats(
+    space_id: int,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    """空间真实统计：聚合 b02/b03/b04/b06/b07 计数与状态分布（空间概览页）。"""
+    require_space_member(db, user, space_id)
+    data = stats_svc.space_stats(sdb, space_id)
+    return ok(data=SpaceStatsOut(**data))
 
 
 # ── 成员管理 ──

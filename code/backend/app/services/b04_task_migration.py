@@ -16,10 +16,13 @@ from app.models.b04_task_migration import (
     TASK_STATUSES,
     TASK_STATUS_TRANSITIONS,
     B04SavedView,
+    B04SavedViewMember,
     B04Scenario,
     B04Task,
     B04TaskNote,
 )
+from app.models.b06_tag import B06Tag, B06TaskTag
+from app.services import b06_tag as tag_svc
 from app.schemas.b04_task_migration import (
     NoteCreate,
     SavedViewCreate,
@@ -194,6 +197,8 @@ def _task_query(
     schedule_status: Optional[str] = None,
     check_status: Optional[str] = None,
     owner: Optional[str] = None,
+    tag_ids: Optional[List[int]] = None,
+    tag_match: str = "all",
 ):
     q = sdb.query(B04Task).filter(
         B04Task.space_id == space_id,
@@ -213,6 +218,30 @@ def _task_query(
         q = q.filter(B04Task.check_status == check_status)
     if owner:
         q = q.filter(B04Task.owner == owner)
+    if tag_ids:
+        if tag_match == "all":
+            # 任务需包含全部所选标签。
+            # 注意：必须用 scalar_subquery() 包裹计数子查询，否则 Query == int 会在
+            # Python 层求值为 False，编译成 WHERE false 导致查不到数据（已用单测复现）。
+            tag_count = (
+                sdb.query(func.count(B06TaskTag.id))
+                .filter(
+                    B06TaskTag.task_id == B04Task.id,
+                    B06TaskTag.tag_id.in_(tag_ids),
+                    B06TaskTag.deleted_at.is_(None),
+                )
+                .correlate(B04Task)
+                .scalar_subquery()
+            )
+            q = q.filter(tag_count == len(tag_ids))
+        else:
+            # 满足任一标签
+            subq = sdb.query(B06TaskTag.task_id).filter(
+                B06TaskTag.space_id == space_id,
+                B06TaskTag.tag_id.in_(tag_ids),
+                B06TaskTag.deleted_at.is_(None),
+            )
+            q = q.filter(B04Task.id.in_(subq))
     return q
 
 
@@ -228,6 +257,8 @@ def list_tasks(
     schedule_status: Optional[str] = None,
     check_status: Optional[str] = None,
     owner: Optional[str] = None,
+    tag_ids: Optional[List[int]] = None,
+    tag_match: str = "all",
 ) -> Tuple[List[B04Task], int]:
     get_scenario(sdb, space_id, scenario_id)
     q = _task_query(
@@ -240,6 +271,8 @@ def list_tasks(
         schedule_status,
         check_status,
         owner,
+        tag_ids,
+        tag_match,
     )
     total = q.count()
     rows = (
@@ -463,6 +496,8 @@ def export_tasks(
     schedule_status: Optional[str] = None,
     check_status: Optional[str] = None,
     owner: Optional[str] = None,
+    tag_ids: Optional[List[int]] = None,
+    tag_match: str = "all",
 ) -> bytes:
     rows = (
         _task_query(
@@ -475,6 +510,8 @@ def export_tasks(
             schedule_status,
             check_status,
             owner,
+            tag_ids,
+            tag_match,
         )
         .order_by(B04Task.id.asc())
         .all()
@@ -540,7 +577,9 @@ def create_note(
     sdb.refresh(obj)
     return obj
 
-
+# ── 标签管理 / 任务标签 ──
+# 标签主表与标签 CRUD、任务标签关联逻辑统一在 app.services.b06_tag 中实现（b06 标签管理模块）；
+# 本模块任务列表/台账仅调用 tag_svc 完成打标签与标签附加，不直接维护标签表。
 # ── 自定义台账 ──
 _ALLOWED_FILTER_KEYS = {
     "keyword",
@@ -553,7 +592,90 @@ _ALLOWED_FILTER_KEYS = {
 
 
 def _clean_filter_config(config: dict) -> dict:
-    return {k: v for k, v in (config or {}).items() if k in _ALLOWED_FILTER_KEYS and v}
+    out = {k: v for k, v in (config or {}).items() if k in _ALLOWED_FILTER_KEYS and v}
+    if config.get("tag_ids"):
+        out["tag_ids"] = config["tag_ids"]
+    if config.get("tag_match"):
+        out["tag_match"] = config["tag_match"]
+    return out
+
+
+def _snapshot_members(sdb: Session, space_id: int, view: B04SavedView, operator: str) -> None:
+    """固化台账：按当前筛选条件快照命中任务 ID 为成员。
+
+    成员表以 (view_id, task_id) 唯一约束，故复用/复活已逻辑删除的旧行，避免重复插入冲突。
+    """
+    filters = _clean_filter_config(view.filter_config or {})
+    rows = _task_query(sdb, space_id, view.scenario_id, **filters).all()
+    now = datetime.now()
+    existing = {
+        r.task_id: r
+        for r in sdb.query(B04SavedViewMember)
+        .filter(B04SavedViewMember.view_id == view.id, B04SavedViewMember.space_id == space_id)
+        .all()
+    }
+    for r in rows:
+        if r.id in existing:
+            existing[r.id].deleted_at = None
+            existing[r.id].updated_by = operator
+            existing[r.id].updated_at = now
+        else:
+            sdb.add(
+                B04SavedViewMember(
+                    space_id=space_id,
+                    view_id=view.id,
+                    task_id=r.id,
+                    created_by=operator,
+                )
+            )
+
+
+def _rebuild_members(sdb: Session, space_id: int, view: B04SavedView, operator: str) -> None:
+    """重建台账成员：动态模式清空成员；固化模式按筛选快照。"""
+    now = datetime.now()
+    sdb.query(B04SavedViewMember).filter(
+        B04SavedViewMember.view_id == view.id,
+        B04SavedViewMember.space_id == space_id,
+    ).update({B04SavedViewMember.deleted_at: now})
+    if view.view_mode == "fixed":
+        _snapshot_members(sdb, space_id, view, operator)
+
+
+def _set_members_from_ids(
+    sdb: Session, space_id: int, view: B04SavedView, task_ids: List[int], operator: str
+) -> None:
+    """R3：按显式任务 ID 写入/复活固化成员（修正 _snapshot_members 的 task_id 索引笔误）。"""
+    if not task_ids:
+        return
+    # 仅保留归属当前 space/scenario 的合法任务，避免悬挂成员
+    valid = {
+        r.id
+        for r in sdb.query(B04Task.id)
+        .filter(
+            B04Task.space_id == space_id,
+            B04Task.scenario_id == view.scenario_id,
+            B04Task.id.in_(task_ids),
+        )
+        .all()
+    }
+    now = datetime.now()
+    existing = {
+        r.task_id: r
+        for r in sdb.query(B04SavedViewMember)
+        .filter(B04SavedViewMember.view_id == view.id, B04SavedViewMember.space_id == space_id)
+        .all()
+    }
+    for tid in valid:
+        if tid in existing:
+            existing[tid].deleted_at = None
+            existing[tid].updated_by = operator
+            existing[tid].updated_at = now
+        else:
+            sdb.add(
+                B04SavedViewMember(
+                    space_id=space_id, view_id=view.id, task_id=tid, created_by=operator
+                )
+            )
 
 
 def list_saved_views(sdb: Session, space_id: int, scenario_id: int) -> List[dict]:
@@ -579,6 +701,7 @@ def list_saved_views(sdb: Session, space_id: int, scenario_id: int) -> List[dict
                 "name": r.name,
                 "description": r.description,
                 "filter_config": r.filter_config,
+                "view_mode": r.view_mode,
                 "task_count": count,
                 "created_by": r.created_by,
                 "created_at": r.created_at,
@@ -602,18 +725,88 @@ def create_saved_view(
         .first()
     ):
         raise BizError(f"台账名称已存在: {payload.name}")
+
+    # R3：勾选具体任务创建台账 → 强制 fixed，直接以所选任务 ID 落为成员（不走筛选快照）
+    if payload.member_ids:
+        obj = B04SavedView(
+            space_id=space_id,
+            scenario_id=scenario_id,
+            name=payload.name,
+            description=payload.description,
+            filter_config={},
+            view_mode="fixed",
+            created_by=operator,
+        )
+        sdb.add(obj)
+        sdb.commit()
+        sdb.refresh(obj)
+        _set_members_from_ids(sdb, space_id, obj, list(payload.member_ids), operator)
+        sdb.commit()
+        return obj
+
     obj = B04SavedView(
         space_id=space_id,
         scenario_id=scenario_id,
         name=payload.name,
         description=payload.description,
         filter_config=_clean_filter_config(payload.filter_config),
+        view_mode=payload.view_mode or "dynamic",
         created_by=operator,
     )
     sdb.add(obj)
     sdb.commit()
     sdb.refresh(obj)
+    if obj.view_mode == "fixed":
+        _snapshot_members(sdb, space_id, obj, operator)
+        sdb.commit()
     return obj
+
+
+def remove_members(
+    sdb: Session, space_id: int, view_id: int, task_ids: List[int], operator: str
+) -> B04SavedView:
+    """R4：从台账移除一个或多个任务 → 无论原为何种类型，均转为「固化台账」并锁定剩余成员。"""
+    view = get_saved_view(sdb, space_id, view_id)
+    if view.view_mode == "dynamic":
+        # 动态台账无成员表，先按当前命中集固化为成员
+        _snapshot_members(sdb, space_id, view, operator)
+        sdb.commit()
+    now = datetime.now()
+    sdb.query(B04SavedViewMember).filter(
+        B04SavedViewMember.view_id == view_id,
+        B04SavedViewMember.space_id == space_id,
+        B04SavedViewMember.task_id.in_(task_ids),
+        B04SavedViewMember.deleted_at.is_(None),
+    ).update({B04SavedViewMember.deleted_at: now})
+    view.view_mode = "fixed"
+    view.updated_by = operator
+    view.updated_at = now
+    sdb.commit()
+    sdb.refresh(view)
+    return view
+
+
+def add_members(
+    sdb: Session, space_id: int, view_id: int, task_ids: List[int], operator: str
+) -> B04SavedView:
+    """补充需求：向台账补充新增任务。
+
+    动态引用台账会先按当前命中集快照为成员并转为「固化台账」，再把指定任务加入成员集合；
+    已存在（含逻辑删除）的成员会被复活，保证幂等。
+    """
+    view = get_saved_view(sdb, space_id, view_id)
+    now = datetime.now()
+    if view.view_mode == "dynamic":
+        _snapshot_members(sdb, space_id, view, operator)
+        sdb.commit()
+        view.view_mode = "fixed"
+        view.updated_by = operator
+        view.updated_at = now
+        sdb.commit()
+    _set_members_from_ids(sdb, space_id, view, list(task_ids), operator)
+    sdb.commit()
+    sdb.refresh(view)
+    return view
 
 
 def get_saved_view(sdb: Session, space_id: int, view_id: int) -> B04SavedView:
@@ -655,6 +848,8 @@ def update_saved_view(
         setattr(obj, field, value)
     obj.updated_by = operator
     obj.updated_at = datetime.now()
+    # 模式或筛选条件变化都重建成员（动态模式清空、固化模式重新快照）
+    _rebuild_members(sdb, space_id, obj, operator)
     sdb.commit()
     sdb.refresh(obj)
     return obj
@@ -662,21 +857,38 @@ def update_saved_view(
 
 def delete_saved_view(sdb: Session, space_id: int, view_id: int) -> None:
     obj = get_saved_view(sdb, space_id, view_id)
-    obj.deleted_at = datetime.now()
+    now = datetime.now()
+    sdb.query(B04SavedViewMember).filter(
+        B04SavedViewMember.view_id == view_id,
+        B04SavedViewMember.space_id == space_id,
+    ).update({B04SavedViewMember.deleted_at: now})
+    obj.deleted_at = now
     sdb.commit()
 
 
 def get_saved_view_out(sdb: Session, space_id: int, view_id: int) -> dict:
     """自定义台账详情（含命中任务数）。"""
     view = get_saved_view(sdb, space_id, view_id)
-    filters = _clean_filter_config(view.filter_config or {})
-    count = _task_query(sdb, space_id, view.scenario_id, **filters).count()
+    if view.view_mode == "fixed":
+        count = (
+            sdb.query(B04SavedViewMember)
+            .filter(
+                B04SavedViewMember.view_id == view_id,
+                B04SavedViewMember.space_id == space_id,
+                B04SavedViewMember.deleted_at.is_(None),
+            )
+            .count()
+        )
+    else:
+        filters = _clean_filter_config(view.filter_config or {})
+        count = _task_query(sdb, space_id, view.scenario_id, **filters).count()
     return {
         "id": view.id,
         "scenario_id": view.scenario_id,
         "name": view.name,
         "description": view.description,
         "filter_config": view.filter_config,
+        "view_mode": view.view_mode,
         "task_count": count,
         "created_by": view.created_by,
         "created_at": view.created_at,
@@ -686,18 +898,62 @@ def get_saved_view_out(sdb: Session, space_id: int, view_id: int) -> dict:
 def export_saved_view_tasks(sdb: Session, space_id: int, view_id: int) -> bytes:
     """导出自定义台账数据（引用原任务）。"""
     view = get_saved_view(sdb, space_id, view_id)
-    filters = _clean_filter_config(view.filter_config or {})
-    rows = _task_query(sdb, space_id, view.scenario_id, **filters).order_by(B04Task.id.asc()).all()
+    if view.view_mode == "fixed":
+        rows = (
+            sdb.query(B04Task)
+            .join(B04SavedViewMember, B04SavedViewMember.task_id == B04Task.id)
+            .filter(
+                B04SavedViewMember.view_id == view_id,
+                B04SavedViewMember.space_id == space_id,
+                B04SavedViewMember.deleted_at.is_(None),
+                B04Task.space_id == space_id,
+            )
+            .order_by(B04Task.id.asc())
+            .all()
+        )
+    else:
+        filters = _clean_filter_config(view.filter_config or {})
+        rows = (
+            _task_query(sdb, space_id, view.scenario_id, **filters)
+            .order_by(B04Task.id.asc())
+            .all()
+        )
     return _tasks_to_xlsx(rows)
 
 
 def list_saved_view_tasks(
-    sdb: Session, space_id: int, view_id: int, page: int, page_size: int
+    sdb: Session,
+    space_id: int,
+    view_id: int,
+    page: int,
+    page_size: int,
+    filters: dict = None,
 ) -> Tuple[List[B04Task], int]:
-    """自定义台账数据：引用原任务（单一真实来源）。"""
+    """自定义台账数据：
+    - 动态模式：按 filter_config 实时计算（引用原任务）；
+    - 固化模式：从成员表取锁定任务（即使原任务改标签/状态仍保留成员）。
+
+    filters（R2 台账内再筛选，D4）：动态=基础 ∩ 搜索；固化=锁定成员内按搜索过滤（不增删成员）。
+    """
     view = get_saved_view(sdb, space_id, view_id)
-    filters = _clean_filter_config(view.filter_config or {})
-    q = _task_query(sdb, space_id, view.scenario_id, **filters)
+    filters = _clean_filter_config(filters or {})
+    if view.view_mode == "fixed":
+        member_ids = [
+            r.task_id
+            for r in sdb.query(B04SavedViewMember.task_id)
+            .filter(
+                B04SavedViewMember.view_id == view_id,
+                B04SavedViewMember.space_id == space_id,
+                B04SavedViewMember.deleted_at.is_(None),
+            )
+            .all()
+        ]
+        q = _task_query(sdb, space_id, view.scenario_id, **filters).filter(
+            B04Task.id.in_(member_ids)
+        )
+    else:
+        base = _clean_filter_config(view.filter_config or {})
+        q = _task_query(sdb, space_id, view.scenario_id, **{**base, **filters})
     total = q.count()
     rows = q.order_by(B04Task.id.asc()).offset((page - 1) * page_size).limit(page_size).all()
     return rows, total

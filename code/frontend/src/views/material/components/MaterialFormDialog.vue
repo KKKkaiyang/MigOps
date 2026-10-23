@@ -75,14 +75,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { MdEditor } from 'md-editor-v3'
-import 'md-editor-v3/lib/style.css'
 import { createMaterial, listCategories, updateMaterial } from '@/api/material'
 import { PLATFORM_LEDGER_TARGET_OPTIONS } from '@/types'
 import type { MaterialCategoryOut, MaterialOut } from '@/types'
+
+// md-editor-v3（PrismJS + CodeMirror，体积大）按需异步加载，避免拖累主包（样式已在 main.ts 全局引入）
+const MdEditor = defineAsyncComponent(() => import('md-editor-v3').then((m) => m.MdEditor))
 
 const props = defineProps<{ modelValue: boolean; material?: MaterialOut | null }>()
 const emit = defineEmits<{

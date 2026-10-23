@@ -98,6 +98,27 @@ def require_l0(user: CommonUser = Depends(get_current_user), db: Session = Depen
     return user
 
 
+def require_space_creator(user: CommonUser = Depends(get_current_user), db: Session = Depends(get_db)) -> CommonUser:
+    """空间创建权限：L0 全局，或任一空间担任 L1 的项目管理员。
+
+    与公共业务需求 §4.4 / 概览页 §3（「+ 创建迁移空间」按钮仅 L0/L1）保持一致；
+    L2 项目成员无创建权限（前端按钮已隐藏，此处为服务端兜底，避免越权直接调接口）。
+    """
+    if is_l0(db, user):
+        return user
+    has_l1 = (
+        db.query(CommonUserRole)
+        .filter(
+            CommonUserRole.user_id == user.id,
+            CommonUserRole.role_level == ROLE_L1,
+        )
+        .first()
+    )
+    if not has_l1:
+        raise ForbiddenError("仅系统管理员或项目管理员可创建空间")
+    return user
+
+
 def require_space_admin(db: Session, user: CommonUser, space_id: int) -> str:
     """空间管理员校验：L0 或该空间的 L1；返回用户在该空间的有效角色。"""
     role = get_space_role(db, user.id, space_id)

@@ -58,20 +58,53 @@
       @keyup.enter="emit('search')"
       @clear="emit('search')"
     />
+    <el-select
+      :model-value="filters.tag_match"
+      placeholder="标签匹配"
+      style="width: 110px"
+      @update:model-value="(v: string) => emit('update', { key: 'tag_match', value: v })"
+      @change="emit('search')"
+    >
+      <el-option label="含全部标签" value="all" />
+      <el-option label="含任一标签" value="any" />
+    </el-select>
+    <el-select
+      :model-value="filters.tag_ids"
+      multiple
+      collapse-tags
+      collapse-tags-tooltip
+      placeholder="按标签筛选"
+      style="width: 200px"
+      @update:model-value="(v: number[]) => emit('update', { key: 'tag_ids', value: v })"
+      @change="emit('search')"
+    >
+      <el-option v-for="t in tags" :key="t.id" :label="t.tag_name" :value="t.id" />
+    </el-select>
     <el-button @click="emit('reset')">重置</el-button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { CHECK_STATUS_OPTIONS, SCHEDULE_STATUS_OPTIONS, TASK_MIGRATION_STATUS_OPTIONS } from '@/types'
 
-defineProps<{ filters: Record<string, string> }>()
+interface TagOption {
+  id: number
+  tag_name: string
+  tag_category?: string
+}
 
+const props = defineProps<{
+  filters: Record<string, any>
+  tags?: TagOption[]
+}>()
 const emit = defineEmits<{
-  (e: 'update', payload: { key: string; value: string }): void
+  (e: 'update', payload: { key: string; value: string | number[] }): void
   (e: 'search'): void
   (e: 'reset'): void
 }>()
+
+const tags = computed(() => props.tags ?? [])
 </script>
 
 <style scoped>

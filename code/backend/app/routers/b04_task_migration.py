@@ -17,7 +17,9 @@ from app.models.user import CommonUser
 from app.schemas.b04_task_migration import (
     NoteCreate,
     NoteOut,
+    SavedViewAddMembers,
     SavedViewCreate,
+    SavedViewRemoveMembers,
     SavedViewUpdate,
     ScenarioCreate,
     ScenarioUpdate,
@@ -26,7 +28,9 @@ from app.schemas.b04_task_migration import (
     TaskStatusIn,
     TaskUpdate,
 )
+from app.schemas.b06_tag import TagBrief, TaskBatchTagIn, TaskTagIn
 from app.services import b04_task_migration as svc
+from app.services import b06_tag as tag_svc
 from app.services.space import get_space
 from app.utils.excel import XLSX_MEDIA_TYPE
 
@@ -41,6 +45,24 @@ def _xlsx_response(content: bytes, filename: str) -> Response:
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}"
         },
     )
+
+
+def _parse_int_list(raw: Optional[str]) -> Optional[list]:
+    """解析逗号分隔的整数列表（空值返回 None）。"""
+    if not raw:
+        return None
+    out = []
+    for part in raw.split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+    return out or None
+
+
+def _task_out_with_tags(task, tag_map: dict) -> TaskOut:
+    out = TaskOut.model_validate(task)
+    out.tags = [TagBrief(**t) for t in tag_map.get(task.id, [])]
+    return out
 
 
 # ── 迁移场景 ──
@@ -111,8 +133,11 @@ def list_tasks(
     schedule_status: str = Query(None),
     check_status: str = Query(None),
     owner: str = Query(None),
+    tag_ids: str = Query(None, description="逗号分隔的标签ID，按 tag_match 规则筛选"),
+    tag_match: str = Query("all", description="all=任务需含全部所选标签;any=含任一标签"),
 ):
     require_space_member(db, user, space_id)
+    tag_id_list = _parse_int_list(tag_ids)
     rows, total = svc.list_tasks(
         sdb,
         space_id,
@@ -125,9 +150,12 @@ def list_tasks(
         schedule_status,
         check_status,
         owner,
+        tag_id_list,
+        tag_match,
     )
+    tag_map = tag_svc.get_task_tags_map(sdb, space_id, [r.id for r in rows])
     data = PageData[TaskOut](
-        list=[TaskOut.model_validate(r) for r in rows],
+        list=[_task_out_with_tags(r, tag_map) for r in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -236,8 +264,11 @@ def export_tasks(
     schedule_status: str = Query(None),
     check_status: str = Query(None),
     owner: str = Query(None),
+    tag_ids: str = Query(None, description="逗号分隔的标签ID，按 tag_match 规则筛选"),
+    tag_match: str = Query("all", description="all=任务需含全部所选标签;any=含任一标签"),
 ):
     require_space_member(db, user, space_id)
+    tag_id_list = _parse_int_list(tag_ids)
     content = svc.export_tasks(
         sdb,
         space_id,
@@ -248,8 +279,60 @@ def export_tasks(
         schedule_status,
         check_status,
         owner,
+        tag_id_list,
+        tag_match,
     )
     return _xlsx_response(content, "任务台账.xlsx")
+
+# ── 任务标签（标签主表与 CRUD 见 b06 标签管理模块；此处仅任务侧打标签） ──
+# ── 任务标签 ──
+@router.get("/tasks/{task_id}/tags")
+def get_task_tags(
+    space_id: int,
+    task_id: int,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    require_space_member(db, user, space_id)
+    return ok(data=tag_svc.get_task_tags(sdb, space_id, task_id))
+
+
+@router.put("/tasks/{task_id}/tags")
+def set_task_tags(
+    space_id: int,
+    task_id: int,
+    payload: TaskTagIn,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    require_space_member(db, user, space_id)
+    tags = tag_svc.set_task_tags(sdb, space_id, task_id, payload, operator=str(user.id))
+    return ok(data=tags, message="标签已更新")
+
+
+@router.post("/scenarios/{scenario_id}/tasks/batch-tags")
+def batch_task_tags(
+    space_id: int,
+    scenario_id: int,
+    payload: TaskBatchTagIn,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    require_space_member(db, user, space_id)
+    svc.get_scenario(sdb, space_id, scenario_id)
+    affected = tag_svc.batch_task_tags(
+        sdb,
+        space_id,
+        payload.ids,
+        payload.tag_ids,
+        payload.action,
+        operator=str(user.id),
+    )
+    action_text = "打标签" if payload.action == "add" else "移除标签"
+    return ok(data={"affected": affected}, message=f"已为 {affected} 个任务{action_text}")
 
 
 # ── 排查备注 ──
@@ -355,16 +438,69 @@ def list_saved_view_tasks(
     user: CommonUser = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
+    keyword: Optional[str] = Query(None),
+    workflow_name: Optional[str] = Query(None),
+    migration_status: Optional[str] = Query(None),
+    schedule_status: Optional[str] = Query(None),
+    check_status: Optional[str] = Query(None),
+    owner: Optional[str] = Query(None),
+    tag_ids: Optional[str] = Query(None),
+    tag_match: str = Query("all"),
 ):
     require_space_member(db, user, space_id)
-    rows, total = svc.list_saved_view_tasks(sdb, space_id, view_id, page, page_size)
+    filters = {
+        k: v
+        for k, v in {
+            "keyword": keyword,
+            "workflow_name": workflow_name,
+            "migration_status": migration_status,
+            "schedule_status": schedule_status,
+            "check_status": check_status,
+            "owner": owner,
+            "tag_ids": _parse_int_list(tag_ids),
+            "tag_match": tag_match,
+        }.items()
+        if v is not None and not (isinstance(v, list) and len(v) == 0)
+    }
+    rows, total = svc.list_saved_view_tasks(sdb, space_id, view_id, page, page_size, filters)
+    tag_map = tag_svc.get_task_tags_map(sdb, space_id, [r.id for r in rows])
     data = PageData[TaskOut](
-        list=[TaskOut.model_validate(r) for r in rows],
+        list=[_task_out_with_tags(r, tag_map) for r in rows],
         total=total,
         page=page,
         page_size=page_size,
     )
     return ok(data=data)
+
+
+@router.post("/saved-views/{view_id}/remove-members")
+def remove_saved_view_members(
+    space_id: int,
+    view_id: int,
+    payload: SavedViewRemoveMembers,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    """R4：从台账移除任务（批量）→ 台账强制转固化并锁定剩余成员。"""
+    require_space_member(db, user, space_id)
+    svc.remove_members(sdb, space_id, view_id, payload.task_ids, operator=str(user.id))
+    return ok(message="已移除指定任务，台账已转为固化台账")
+
+
+@router.post("/saved-views/{view_id}/add-members")
+def add_saved_view_members(
+    space_id: int,
+    view_id: int,
+    payload: SavedViewAddMembers,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_current_user),
+):
+    """补充需求：向台账补充新增任务（动态引用台账将自动固化为成员集合）。"""
+    require_space_member(db, user, space_id)
+    svc.add_members(sdb, space_id, view_id, payload.task_ids, operator=str(user.id))
+    return ok(message="已向台账补充任务")
 
 
 @router.get("/saved-views/{view_id}/tasks/export")

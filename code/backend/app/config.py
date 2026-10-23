@@ -12,13 +12,16 @@ class Settings:
     API_V1_PREFIX = os.getenv("API_V1_PREFIX", "/api/v1")
 
     DB_TYPE = os.getenv("DB_TYPE", "mysql")  # mysql | starrocks
+    # 注意：本机 /etc/hosts 缺失 127.0.0.1 localhost 回环映射时，
+    # pymysql 解析 "localhost" 会报 [Errno 8] nodename nor servname，
+    # 故默认使用 IP 127.0.0.1 直连，避免依赖 DNS 解析。
     MYSQL_URL = os.getenv(
         "MYSQL_URL",
-        "mysql+pymysql://root:mysql@localhost:3306/mig_common_db?charset=utf8mb4",
+        "mysql+pymysql://root:mysql@127.0.0.1:3306/mig_common_db?charset=utf8mb4",
     )
     STARROCKS_URL = os.getenv(
         "STARROCKS_URL",
-        "mysql+pymysql://root:root@localhost:9030/mig_common_db?charset=utf8mb4",
+        "mysql+pymysql://root:root@127.0.0.1:9030/mig_common_db?charset=utf8mb4",
     )
 
     DEFAULT_PAGE_SIZE = int(os.getenv("DEFAULT_PAGE_SIZE", "20"))

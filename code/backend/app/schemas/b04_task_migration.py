@@ -12,6 +12,7 @@ from app.models.b04_task_migration import (
     TASK_STATUSES,
     TASK_STATUS_TRANSITIONS,
 )
+from app.schemas.b06_tag import TagBrief
 
 
 # ── 迁移场景 ──
@@ -85,6 +86,7 @@ class TaskOut(BaseModel):
     input_tables: Optional[str] = None
     output_tables: Optional[str] = None
     latest_note: Optional[str] = None
+    tags: List[TagBrief] = []
     updated_by: Optional[str] = None
     updated_at: Optional[datetime] = None
 
@@ -128,13 +130,45 @@ class NoteOut(BaseModel):
 class SavedViewCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: Optional[str] = Field(None, max_length=512)
-    filter_config: dict = Field(..., description="筛选条件(属性组合)")
+    filter_config: dict = Field(default_factory=dict, description="筛选条件(属性组合 + 标签维度)")
+    view_mode: str = Field("dynamic", description="dynamic=动态引用;fixed=固化台账(锁定命中ID)")
+    # R3：勾选具体任务创建台账 → 直接以所选任务 ID 落为固化成员（强制 fixed）
+    member_ids: Optional[List[int]] = Field(
+        None, description="R3 勾选任务创建台账：直接固化为成员(强制 fixed)，与 filter_config 互斥"
+    )
+
+    @field_validator("view_mode")
+    @classmethod
+    def _check_mode(cls, v: str) -> str:
+        if v not in ("dynamic", "fixed"):
+            raise ValueError("view_mode 必须为 dynamic 或 fixed")
+        return v
+
+
+class SavedViewRemoveMembers(BaseModel):
+    """R4：从台账移除任务（批量）。"""
+
+    task_ids: List[int] = Field(..., min_length=1, description="要移除的任务 ID 列表")
+
+
+class SavedViewAddMembers(BaseModel):
+    """补充需求：向台账补充新增任务（批量加入成员；动态引用台账将自动固化为成员集合）。"""
+
+    task_ids: List[int] = Field(..., min_length=1, description="要加入台账的任务 ID 列表")
 
 
 class SavedViewUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=128)
     description: Optional[str] = Field(None, max_length=512)
     filter_config: Optional[dict] = None
+    view_mode: Optional[str] = None
+
+    @field_validator("view_mode")
+    @classmethod
+    def _check_mode(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("dynamic", "fixed"):
+            raise ValueError("view_mode 必须为 dynamic 或 fixed")
+        return v
 
 
 class SavedViewOut(BaseModel):
@@ -145,9 +179,13 @@ class SavedViewOut(BaseModel):
     name: str
     description: Optional[str] = None
     filter_config: dict
+    view_mode: str = "dynamic"
     task_count: int = 0
     created_by: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+# ── 标签管理（标签主表与 CRUD 见 b06_tag schema；此处仅任务侧引用 TagBrief） ──
 
 
 def allowed_next_statuses(current: str) -> List[str]:

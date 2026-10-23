@@ -24,12 +24,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { MdPreview } from 'md-editor-v3'
-import 'md-editor-v3/lib/preview.css'
 import DOMPurify from 'dompurify'
+// md-editor-v3（PrismJS + CodeMirror，体积大）按需异步加载，避免拖累主包（样式已在 main.ts 全局引入）
+const MdPreview = defineAsyncComponent(() => import('md-editor-v3').then((m) => m.MdPreview))
 import { downloadFile } from '@/utils/download'
 import { getViewToken } from '@/utils/view-token'
 import type { MaterialOut } from '@/types'

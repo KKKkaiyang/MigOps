@@ -9,6 +9,9 @@ import MaterialList from '@/views/material/MaterialList.vue'
 import DataMigrationList from '@/views/data-migration/DataMigrationList.vue'
 import TaskMigrationList from '@/views/task-migration/TaskMigrationList.vue'
 import SavedViewList from '@/views/task-migration/SavedViewList.vue'
+import LedgerList from '@/views/task-migration/LedgerList.vue'
+import LineageView from '@/views/lineage/LineageView.vue'
+import TagManage from '@/views/tag/TagManage.vue'
 import UserList from '@/views/user/UserList.vue'
 
 const routes = [
@@ -56,10 +59,31 @@ const routes = [
         meta: { title: '任务迁移', module: 'b04' },
       },
       {
-        path: 'tasks/views/:viewId',
+        // 任务台账清单（收纳为任务迁移子导航，路由统一 tasks/ledgers，交互评审 I6）
+        path: 'tasks/ledgers',
+        name: 'space-ledgers',
+        component: LedgerList,
+        meta: { title: '任务台账', module: 'b04' },
+      },
+      {
+        // 台账详情（与清单同层级前缀）
+        path: 'tasks/ledgers/:viewId',
         name: 'space-saved-view',
         component: SavedViewList,
-        meta: { title: '自定义台账', module: 'b04' },
+        meta: { title: '任务台账', module: 'b04' },
+      },
+      {
+        // 标签管理（收纳为任务迁移子导航）
+        path: 'tasks/tags',
+        name: 'space-tags',
+        component: TagManage,
+        meta: { title: '标签管理', module: 'b06' },
+      },
+      {
+        path: 'lineage',
+        name: 'space-lineage',
+        component: LineageView,
+        meta: { title: '血缘管理', module: 'b07' },
       },
     ],
   },

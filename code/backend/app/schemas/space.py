@@ -85,3 +85,27 @@ class SpaceMemberOut(BaseModel):
     org_type: Optional[str] = None
     role_level: str
     role_name: str
+
+
+class SpaceStatsOut(BaseModel):
+    """空间真实统计（供空间概览页展示，数据由各业务模块聚合）。"""
+
+    b02_material_count: int = 0
+    b02_category_count: int = 0
+    b03_scenario_count: int = 0
+    b03_table_total: int = 0
+    b03_metadata_stats: dict = Field(default_factory=dict)
+    b03_full_sync_stats: dict = Field(default_factory=dict)
+    b03_incr_sync_stats: dict = Field(default_factory=dict)
+    b03_record_count: int = 0
+    b04_scenario_count: int = 0
+    b04_task_total: int = 0
+    b04_migration_stats: dict = Field(default_factory=dict)
+    b04_note_count: int = 0
+    b04_view_count: int = 0
+    b04_fixed_view_count: int = 0
+    b06_tag_count: int = 0
+    b06_manage_tag_count: int = 0
+    b06_tech_tag_count: int = 0
+    b07_edge_count: int = 0
+    b07_workflow_count: int = 0

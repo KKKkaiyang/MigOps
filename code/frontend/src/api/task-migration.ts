@@ -7,6 +7,7 @@ import type {
   TaskNoteOut,
   TaskOut,
   TaskScenarioOut,
+  TaskTagBrief,
 } from '@/types'
 
 /** 任务迁移场景列表（含 task_count） */
@@ -51,6 +52,37 @@ export function deleteScenario(spaceId: number, scenarioId: number) {
   })
 }
 
+/** 任务标签读写（标签主表与 CRUD 见 @/api/tag，b06 标签管理模块） */
+export function getTaskTags(spaceId: number, taskId: number) {
+  return http<TaskTagBrief[]>({
+    url: `/b04/tasks/${taskId}/tags`,
+    method: 'GET',
+    params: { space_id: spaceId },
+  })
+}
+
+export function setTaskTags(spaceId: number, taskId: number, tagIds: number[]) {
+  return http<TaskTagBrief[]>({
+    url: `/b04/tasks/${taskId}/tags`,
+    method: 'PUT',
+    params: { space_id: spaceId },
+    data: { tag_ids: tagIds },
+  })
+}
+
+export function batchTaskTags(
+  spaceId: number,
+  scenarioId: number,
+  payload: { ids: number[]; tag_ids: number[]; action: 'add' | 'remove' }
+) {
+  return http<{ affected: number }>({
+    url: `/b04/scenarios/${scenarioId}/tasks/batch-tags`,
+    method: 'POST',
+    params: { space_id: spaceId },
+    data: payload,
+  })
+}
+
 /** 任务台账分页 */
 export function listTasks(
   spaceId: number,
@@ -64,12 +96,24 @@ export function listTasks(
     schedule_status?: string
     check_status?: string
     owner?: string
+    tag_ids?: number[]
+    tag_match?: 'all' | 'any'
   } = {}
 ) {
+  const params: Record<string, unknown> = {
+    space_id: spaceId,
+    page,
+    page_size,
+  }
+  for (const [k, v] of Object.entries(filters)) {
+    if (v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) continue
+    if (k === 'tag_ids') params[k] = (v as number[]).join(',')
+    else params[k] = v
+  }
   return http<PageData<TaskOut>>({
     url: `/b04/scenarios/${scenarioId}/tasks`,
     method: 'GET',
-    params: { space_id: spaceId, page, page_size, ...filters },
+    params,
   })
 }
 
@@ -181,11 +225,18 @@ export function getSavedView(spaceId: number, viewId: number) {
   })
 }
 
-/** 保存筛选条件为自定义台账 */
+/** 保存筛选条件为自定义台账（含视图模式）或勾选任务创建固化台账 */
 export function createSavedView(
   spaceId: number,
   scenarioId: number,
-  payload: { name: string; description?: string; filter_config: Record<string, string> }
+  payload: {
+    name: string
+    description?: string
+    filter_config?: Record<string, unknown>
+    view_mode?: 'dynamic' | 'fixed'
+    /** R3：勾选任务创建台账，直接固化为成员（与 filter_config 互斥） */
+    member_ids?: number[]
+  }
 ) {
   return http<{ id: number; name: string }>({
     url: `/b04/scenarios/${scenarioId}/saved-views`,
@@ -199,7 +250,12 @@ export function createSavedView(
 export function updateSavedView(
   spaceId: number,
   viewId: number,
-  payload: { name?: string; description?: string; filter_config?: Record<string, string> }
+  payload: {
+    name?: string
+    description?: string
+    filter_config?: Record<string, unknown>
+    view_mode?: 'dynamic' | 'fixed'
+  }
 ) {
   return http<null>({
     url: `/b04/saved-views/${viewId}`,
@@ -218,16 +274,52 @@ export function deleteSavedView(spaceId: number, viewId: number) {
   })
 }
 
-/** 自定义台账数据（引用原任务） */
+/** 自定义台账数据（引用原任务），支持台账内再筛选（R2/D4） */
 export function listSavedViewTasks(
   spaceId: number,
   viewId: number,
   page = 1,
-  page_size = 20
+  page_size = 20,
+  filters: {
+    keyword?: string
+    workflow_name?: string
+    migration_status?: string
+    schedule_status?: string
+    check_status?: string
+    owner?: string
+    tag_ids?: number[]
+    tag_match?: 'all' | 'any'
+  } = {}
 ) {
+  const params: Record<string, unknown> = { space_id: spaceId, page, page_size }
+  for (const [k, v] of Object.entries(filters)) {
+    if (v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) continue
+    if (k === 'tag_ids') params[k] = (v as number[]).join(',')
+    else params[k] = v
+  }
   return http<PageData<TaskOut>>({
     url: `/b04/saved-views/${viewId}/tasks`,
     method: 'GET',
-    params: { space_id: spaceId, page, page_size },
+    params,
+  })
+}
+
+/** R4：从台账移除任务（批量）→ 台账强制转固化并锁定剩余成员 */
+export function removeSavedViewMembers(spaceId: number, viewId: number, taskIds: number[]) {
+  return http<null>({
+    url: `/b04/saved-views/${viewId}/remove-members`,
+    method: 'POST',
+    params: { space_id: spaceId },
+    data: { task_ids: taskIds },
+  })
+}
+
+/** 补充需求：向台账补充新增任务（批量）→ 动态引用台账自动固化为成员集合 */
+export function addSavedViewMembers(spaceId: number, viewId: number, taskIds: number[]) {
+  return http<null>({
+    url: `/b04/saved-views/${viewId}/add-members`,
+    method: 'POST',
+    params: { space_id: spaceId },
+    data: { task_ids: taskIds },
   })
 }

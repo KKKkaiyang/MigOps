@@ -213,6 +213,29 @@ class B04SavedView(SpaceBase):
     name = Column(String(128), nullable=False, comment="台账名称")
     description = Column(String(512), comment="台账描述")
     filter_config = Column(JSON, nullable=False, comment="筛选条件(JSON)")
+    view_mode = Column(String(16), nullable=False, default="dynamic", comment="dynamic=动态引用;fixed=固化台账(锁定成员)")
+    created_by = Column(String(64), comment="创建人")
+    created_at = Column(DateTime, default=datetime.now, comment="创建时间")
+    updated_by = Column(String(64), comment="更新人")
+    updated_at = Column(
+        DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间"
+    )
+    deleted_at = Column(DateTime, comment="逻辑删除时间")
+
+
+class B04SavedViewMember(SpaceBase):
+    """固化台账成员（仅固化模式写入，锁定命中任务ID）。"""
+
+    __tablename__ = "b04_saved_view_member"
+    __table_args__ = (
+        UniqueConstraint("view_id", "task_id", name="uk_view_task"),
+        Index("idx_view", "view_id"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
+    space_id = Column(BigInteger, nullable=False, comment="所属空间")
+    view_id = Column(BigInteger, nullable=False, comment="台账ID")
+    task_id = Column(BigInteger, nullable=False, comment="任务ID（快照成员）")
     created_by = Column(String(64), comment="创建人")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_by = Column(String(64), comment="更新人")

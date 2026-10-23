@@ -1,61 +1,147 @@
 <template>
-  <!-- 项目空间视图框架：空间头部信息 + 模块导航 + 子页面（需求 §2.1） -->
-  <div class="space-view">
-    <el-card class="space-header" shadow="never" v-loading="loading">
-      <template #header>
-        <div class="space-head">
-          <div class="space-title-row">
-            <span class="space-title">{{ space?.space_name }}</span>
-            <SpaceStatusTag v-if="space" :status="space.status" />
-            <span class="space-code mono">{{ space?.space_code }}</span>
+  <!-- 项目空间视图框架：侧边分组导航 + 空间头（分区 + 场景切换器常驻）+ 子页面 -->
+  <div class="space-view" v-loading="loading">
+    <div class="space-body">
+      <!-- 侧边分组导航（交互评审 I1：按业务阶段分组，任务列表/台账/标签收纳为任务迁移子项） -->
+      <aside class="sidebar">
+        <div class="side-group">
+          <router-link class="side-item" :to="{ name: 'space-overview', params: { spaceId } }">
+            <span class="ico">🏠</span>空间概览
+          </router-link>
+        </div>
+
+        <div class="side-group">
+          <div class="side-group-title">资料准备</div>
+          <router-link class="side-item" :to="{ name: 'space-materials', params: { spaceId } }">
+            <span class="ico">📄</span>项目资料索引
+            <span v-if="stats" class="side-badge">{{ stats.b02_material_count }}</span>
+          </router-link>
+        </div>
+
+        <div class="side-group">
+          <div class="side-group-title">迁移执行</div>
+          <router-link class="side-item" :to="{ name: 'space-data-migrations', params: { spaceId } }">
+            <span class="ico">🗄️</span>数据迁移
+          </router-link>
+          <div class="side-item side-parent" :class="{ on: inTaskModule }" @click="taskGroupOpen = !taskGroupOpen">
+            <span class="ico">⚙️</span>任务迁移
+            <span class="caret" :class="{ open: taskGroupOpen }">▾</span>
           </div>
-          <div class="space-sub">
-            <span v-if="routeLine">{{ routeLine }}</span>
-            <span v-else>源/目标端平台未维护</span>
-            <span class="dot">·</span>
-            <span>我的角色：{{ roleLabel }}</span>
-            <span class="dot">·</span>
-            <span>成员 {{ space?.member_count ?? 0 }} 人</span>
+          <div class="side-sub" v-show="taskGroupOpen || inTaskModule">
+            <router-link class="side-item" :to="{ name: 'space-tasks', params: { spaceId } }">
+              任务列表<span v-if="stats" class="side-badge">{{ stats.b04_task_total }}</span>
+            </router-link>
+            <router-link class="side-item" :to="{ name: 'space-ledgers', params: { spaceId } }">
+              任务台账<span v-if="stats" class="side-badge">{{ stats.b04_view_count }}</span>
+            </router-link>
+            <router-link class="side-item" :to="{ name: 'space-tags', params: { spaceId } }">
+              标签管理<span v-if="stats" class="side-badge">{{ stats.b06_tag_count }}</span>
+            </router-link>
           </div>
         </div>
-      </template>
-      <div class="progress-row" v-if="space">
-        <span class="progress-label">整体进展</span>
-        <el-progress
-          :percentage="space.overall_progress"
-          :stroke-width="10"
-          :show-text="false"
-          class="progress-bar"
-        />
-        <span class="progress-num">{{ space.overall_progress }}%</span>
+
+        <div class="side-group">
+          <div class="side-group-title">数据资产</div>
+          <router-link class="side-item" :to="{ name: 'space-lineage', params: { spaceId } }">
+            <span class="ico">🕸️</span>血缘管理
+          </router-link>
+        </div>
+      </aside>
+
+      <!-- 主内容区 -->
+      <div class="space-main">
+        <!-- 空间头：左区身份信息 / 右区角色·成员·自评进展 + 场景切换器（I12 分区） -->
+        <header class="space-head">
+          <div class="head-left">
+            <div class="title-row">
+              <span class="space-title">{{ space?.space_name }}</span>
+              <SpaceStatusTag v-if="space" :status="space.status" />
+              <span class="space-code mono">{{ space?.space_code }}</span>
+            </div>
+            <div class="head-meta">
+              <span v-if="routeLine">{{ routeLine }}</span>
+              <span v-else class="muted">源/目标端平台未维护</span>
+              <template v-if="space?.customer_name">
+                <span class="dot">·</span><span>客户：{{ space.customer_name }}</span>
+              </template>
+            </div>
+          </div>
+          <div class="head-right">
+            <SpaceScenarioPicker
+              :module="pickerModule"
+              :scenarios="pickerScenarios"
+              :scenario-id="pickerScenarioId"
+              @change="onScenarioChange"
+              @create="openScenarioCreate"
+              @delete="removeScenario"
+            />
+            <div class="head-chip">
+              <span class="k">我的角色</span>
+              <span class="v">{{ roleLabel }}</span>
+            </div>
+            <div class="head-chip">
+              <span class="k">成员</span>
+              <span class="v">{{ space?.member_count ?? 0 }} 人</span>
+            </div>
+            <div class="head-chip">
+              <span class="k">整体进展（自评）</span>
+              <div class="progress-mini">
+                <div class="bar"><i :style="{ width: `${space?.overall_progress ?? 0}%` }" /></div>
+                <span class="num">{{ space?.overall_progress ?? 0 }}%</span>
+                <el-button v-if="canEditSpace" link type="primary" size="small" @click="editVisible = true">编辑</el-button>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <router-view v-if="!loading" />
       </div>
-      <p v-if="space?.remark" class="space-remark">{{ space.remark }}</p>
-    </el-card>
+    </div>
 
-    <nav class="space-nav">
-      <router-link :to="{ name: 'space-overview', params: { spaceId } }">空间概览</router-link>
-      <router-link :to="{ name: 'space-materials', params: { spaceId } }">项目资料索引</router-link>
-      <router-link :to="{ name: 'space-data-migrations', params: { spaceId } }">数据迁移</router-link>
-      <router-link :to="{ name: 'space-tasks', params: { spaceId } }">任务迁移</router-link>
-    </nav>
-
-    <router-view v-if="!loading" />
+    <!-- 场景创建（按当前模块路由到对应弹窗） -->
+    <B03ScenarioDialog v-model="b03ScenarioVisible" @success="onB03ScenarioCreated" />
+    <B04ScenarioDialog v-model="b04ScenarioVisible" @success="onB04ScenarioCreated" />
+    <!-- 空间信息编辑（整体进展等，仅 L0/L1） -->
+    <SpaceFormDialog v-model="editVisible" :space="space" @success="reloadSpace" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getSpace } from '@/api/space'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import SpaceStatusTag from '@/components/common/SpaceStatusTag.vue'
+import SpaceScenarioPicker from './components/SpaceScenarioPicker.vue'
+import SpaceFormDialog from './components/SpaceFormDialog.vue'
+import B03ScenarioDialog from '@/views/data-migration/components/ScenarioDialog.vue'
+import B04ScenarioDialog from '@/views/task-migration/components/ScenarioDialog.vue'
+import { getSpace, getSpaceStats } from '@/api/space'
+import { deleteScenario as deleteB03Scenario, listScenarios as listB03Scenarios } from '@/api/data-migration'
+import { deleteScenario as deleteB04Scenario, listScenarios as listB04Scenarios } from '@/api/task-migration'
+import { useScenarioStore } from '@/store/scenario'
+import { useUserStore } from '@/store/user'
 import { ROLE_LEVEL_MAP } from '@/types'
-import type { SpaceOut } from '@/types'
+import type { DataMigrationScenarioOut, SpaceOut, SpaceStatsOut, TaskScenarioOut } from '@/types'
 
 const route = useRoute()
+const userStore = useUserStore()
+const scenarioStore = useScenarioStore()
+
 const spaceId = computed(() => Number(route.params.spaceId))
 
 const space = ref<SpaceOut | null>(null)
+const stats = ref<SpaceStatsOut | null>(null)
 const loading = ref(true)
+
+/** b03 / b04 场景清单（供空间头切换器下拉） */
+const b03Scenarios = ref<DataMigrationScenarioOut[]>([])
+const b04Scenarios = ref<TaskScenarioOut[]>([])
+
+/** 任务迁移子导航：路由在任务模块内或用户手动展开时保持展开 */
+const taskGroupOpen = ref(false)
+const inTaskModule = computed(() =>
+  ['space-tasks', 'space-ledgers', 'space-saved-view', 'space-tags'].includes(String(route.name))
+)
 
 const routeLine = computed(() => {
   const s = space.value
@@ -68,35 +154,264 @@ const roleLabel = computed(() => {
   return role ? ROLE_LEVEL_MAP[role as keyof typeof ROLE_LEVEL_MAP] || role : '—'
 })
 
-onMounted(async () => {
+/** 空间信息编辑（整体进展等）：L0 或本空间 L1 */
+const canEditSpace = computed(() => userStore.isL0 || space.value?.my_role === 'L1')
+
+// ── 场景切换器（仅 b03/b04 页面激活） ──
+const pickerModule = computed<'b03' | 'b04' | null>(() => {
+  const m = route.meta.module
+  return m === 'b03' || m === 'b04' ? m : null
+})
+
+const pickerScenarios = computed(() => {
+  if (pickerModule.value === 'b03') {
+    return b03Scenarios.value.map((s) => ({ id: s.id, label: `${s.name}（${s.table_count} 张表）` }))
+  }
+  if (pickerModule.value === 'b04') {
+    return b04Scenarios.value.map((s) => ({ id: s.id, label: `${s.name}（${s.task_count} 个任务）` }))
+  }
+  return []
+})
+
+const pickerScenarioId = computed(() => {
+  if (pickerModule.value === 'b03') return scenarioStore.b03?.id ?? null
+  if (pickerModule.value === 'b04') return scenarioStore.b04?.id ?? null
+  return null
+})
+
+function onScenarioChange(id: number) {
+  if (pickerModule.value === 'b03') {
+    const s = b03Scenarios.value.find((x) => x.id === id)
+    scenarioStore.selectB03(s ? { id: s.id, name: s.name } : null)
+  } else if (pickerModule.value === 'b04') {
+    const s = b04Scenarios.value.find((x) => x.id === id)
+    scenarioStore.selectB04(s ? { id: s.id, name: s.name } : null)
+  }
+}
+
+// ── 弹窗与场景管理 ──
+const b03ScenarioVisible = ref(false)
+const b04ScenarioVisible = ref(false)
+const editVisible = ref(false)
+
+function openScenarioCreate() {
+  if (pickerModule.value === 'b03') b03ScenarioVisible.value = true
+  else if (pickerModule.value === 'b04') b04ScenarioVisible.value = true
+}
+
+async function reloadScenarios() {
+  const [b03List, b04List] = await Promise.all([
+    listB03Scenarios(spaceId.value),
+    listB04Scenarios(spaceId.value),
+  ])
+  b03Scenarios.value = b03List
+  b04Scenarios.value = b04List
+}
+
+function onB03ScenarioCreated(s: { id: number; name: string }) {
+  b03ScenarioVisible.value = false
+  scenarioStore.selectB03(s)
+  reloadScenarios()
+}
+
+function onB04ScenarioCreated(s: { id: number; name: string }) {
+  b04ScenarioVisible.value = false
+  scenarioStore.selectB04(s)
+  reloadScenarios()
+}
+
+async function removeScenario() {
+  if (pickerModule.value === 'b03') {
+    if (!scenarioStore.b03) return
+    await ElMessageBox.confirm(
+      `删除场景将级联删除「${scenarioStore.b03.name}」下全部库表清单与迁移记录，确认删除？`,
+      '删除场景',
+      { type: 'warning' }
+    )
+    await deleteB03Scenario(spaceId.value, scenarioStore.b03.id)
+    scenarioStore.clearB03()
+    ElMessage.success('场景已删除')
+  } else if (pickerModule.value === 'b04') {
+    if (!scenarioStore.b04) return
+    await ElMessageBox.confirm(
+      `删除场景将级联删除「${scenarioStore.b04.name}」下全部任务、备注与自定义台账，确认删除？`,
+      '删除场景',
+      { type: 'warning' }
+    )
+    await deleteB04Scenario(spaceId.value, scenarioStore.b04.id)
+    scenarioStore.clearB04()
+    ElMessage.success('场景已删除')
+  }
+  await reloadScenarios()
+}
+
+// ── 数据加载 ──
+async function reloadSpace() {
+  space.value = await getSpace(spaceId.value)
+}
+
+async function loadAll() {
   loading.value = true
   try {
-    space.value = await getSpace(spaceId.value)
+    const [s, st] = await Promise.all([getSpace(spaceId.value), getSpaceStats(spaceId.value)])
+    space.value = s
+    stats.value = st
   } finally {
     loading.value = false
   }
+}
+
+watch(spaceId, () => {
+  // 切换空间：重置场景上下文与全部数据，避免串空间
+  scenarioStore.clear()
+  loadAll()
+  reloadScenarios()
+})
+
+onMounted(async () => {
+  await loadAll()
+  await reloadScenarios()
 })
 </script>
 
 <style scoped>
 .space-view {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  min-height: 100%;
 }
 
-.space-header {
-  border-color: var(--color-border);
+.space-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+/* ── 侧边导航 ── */
+.sidebar {
+  width: 208px;
+  flex-shrink: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px 8px;
+  position: sticky;
+  top: 84px;
+}
+
+.side-group {
+  margin-bottom: 14px;
+}
+
+.side-group-title {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 4px 10px 6px;
+}
+
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-text-regular);
+  text-decoration: none;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: all 0.15s;
+}
+
+.side-item:hover {
+  background: var(--el-color-primary-light-9);
+  color: var(--color-primary);
+}
+
+.side-item.on,
+.side-item.router-link-active {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+.side-item.on .side-badge,
+.side-item.router-link-active .side-badge {
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.side-item .ico {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.side-parent .caret {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  transition: transform 0.15s;
+}
+
+.side-parent .caret.open {
+  transform: rotate(180deg);
+}
+
+.side-sub {
+  margin: 2px 0 6px 26px;
+  border-left: 2px solid var(--color-border-light);
+  padding-left: 8px;
+}
+
+.side-sub .side-item {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+.side-sub .side-item.router-link-active {
+  background: var(--el-color-primary-light-9);
+  color: var(--color-primary);
+}
+
+.side-sub .side-item.router-link-active .side-badge {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.side-badge {
+  margin-left: auto;
+  background: #eef1f5;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  border-radius: 9px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
+/* ── 空间头 ── */
+.space-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .space-head {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px 16px;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
-.space-title-row {
+.head-left {
+  min-width: 0;
+}
+
+.title-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -114,12 +429,11 @@ onMounted(async () => {
   color: var(--color-text-muted);
 }
 
-.space-sub {
-  margin-top: 6px;
+.head-meta {
+  margin-top: 3px;
   font-size: 12px;
-  color: var(--color-text-regular);
+  color: var(--color-text-muted);
   display: flex;
-  align-items: center;
   gap: 6px;
   flex-wrap: wrap;
 }
@@ -128,64 +442,60 @@ onMounted(async () => {
   color: var(--color-border-strong);
 }
 
-.progress-row {
+.head-right {
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
-.progress-label {
-  font-size: 12px;
-  color: var(--color-text-regular);
-  white-space: nowrap;
-}
-
-.progress-bar {
-  flex: 1;
-}
-
-.progress-num {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-primary);
-  min-width: 40px;
-  text-align: right;
-}
-
-.space-remark {
-  margin: 10px 0 0;
-  font-size: 12px;
-  color: var(--color-text-muted);
-  line-height: 1.6;
-}
-
-.space-nav {
+.head-chip {
   display: flex;
-  gap: 4px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 4px;
+  flex-direction: column;
+  gap: 1px;
 }
 
-.space-nav a {
-  padding: 8px 16px;
-  border-radius: 6px;
-  font-size: 13px;
+.head-chip .k {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.head-chip .v {
+  font-size: 12px;
   color: var(--color-text-regular);
-  text-decoration: none;
-  transition: all 0.15s;
-}
-
-.space-nav a:hover {
-  color: var(--color-primary);
-  background: var(--color-primary-light, #eef4ff);
-}
-
-.space-nav a.router-link-active {
-  background: var(--color-primary);
-  color: #fff;
   font-weight: 600;
+}
+
+.progress-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.progress-mini .bar {
+  width: 110px;
+  height: 8px;
+  border-radius: 4px;
+  background: #eef1f5;
+  overflow: hidden;
+}
+
+.progress-mini .bar i {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 4px;
+}
+
+.progress-mini .num {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.muted {
+  color: var(--color-text-muted);
 }
 </style>

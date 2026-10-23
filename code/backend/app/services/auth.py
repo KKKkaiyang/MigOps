@@ -69,12 +69,14 @@ def login(db: Session, payload: LoginIn) -> LoginOut:
 
     if not verify_password(payload.password, user.password):
         _register_failure(db, user)
+        # 失败计数达到阈值时 _register_failure 会立即锁定并将计数清零，
+        # 因此必须先判断锁定状态，否则会误报「还可尝试 N 次」。
+        if user.locked_until and user.locked_until > datetime.now():
+            raise ForbiddenError(
+                f"密码错误次数过多，账号已锁定，请 {_lock_remaining_minutes(user)} 分钟后重试"
+            )
         remain = settings.LOGIN_LOCK_THRESHOLD - (user.login_fail_count or 0)
-        if remain > 0:
-            raise BizError(f"用户名或密码错误，还可尝试 {remain} 次")
-        raise ForbiddenError(
-            f"密码错误次数过多，账号已锁定 {settings.LOGIN_LOCK_MINUTES} 分钟"
-        )
+        raise BizError(f"用户名或密码错误，还可尝试 {remain} 次")
 
     # 登录成功：重置失败计数与锁定状态
     user.login_fail_count = 0

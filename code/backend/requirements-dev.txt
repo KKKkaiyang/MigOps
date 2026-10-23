@@ -1,0 +1,4 @@
+# 开发与测试依赖（功能测试：pytest + FastAPI TestClient）
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27

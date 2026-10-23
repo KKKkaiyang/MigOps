@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>迁移管家（MigOps）界面原型 — 新功能排版 V1.0</title>
+<style>
+  /* ============ 设计令牌（CODEBUDDY.md §6.4） ============ */
+  :root {
+    --primary: #1a73e8; --primary-hover: #1558b0; --primary-light: #eef4ff; --primary-light-2: #e8f0fe;
+    --bg: #eef2f7; --surface: #ffffff; --header-border: #e3e9f0;
+    --text-primary: #1f2d3d; --text-regular: #37475a; --text-muted: #8a96a3; --text-muted-2: #9aa7b5;
+    --success: #188038; --success-light: #e6f4ea;
+    --warn: #f2a100; --warn-light: #fef7e0; --warn-deep: #b06a00;
+    --danger: #e53935; --danger-light: #fdecea;
+    --neutral: #bdc3c7;
+    --border: #d7dee7; --border-strong: #c7d2e0; --border-light: #e3e9f0;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+    --mono: ui-monospace, Menlo, Consolas, monospace;
+    --shadow-light: 0 2px 8px rgba(0,0,0,0.04);
+    --shadow-mid: 0 8px 24px rgba(0,0,0,0.12);
+    --shadow-heavy: 0 16px 48px rgba(0,0,0,0.25);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font); background: var(--bg); color: var(--text-regular); font-size: 13px; line-height: 1.5; }
+  .mono { font-family: var(--mono); }
+
+  /* ============ 原型文档框架 ============ */
+  .proto-topbar { position: sticky; top: 0; z-index: 1100; background: var(--surface); border-bottom: 1px solid var(--header-border); box-shadow: var(--shadow-light); padding: 0 24px; height: 56px; display: flex; align-items: center; gap: 20px; }
+  .proto-topbar .logo { font-size: 15px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+  .proto-topbar .logo em { font-style: normal; color: var(--primary); }
+  .proto-topbar nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  .proto-topbar nav a { padding: 4px 10px; border-radius: 6px; font-size: 12px; color: var(--text-regular); text-decoration: none; }
+  .proto-topbar nav a:hover { background: var(--primary-light); color: var(--primary); }
+  .proto-topbar nav a.on { background: var(--primary); color: #fff; font-weight: 600; }
+  .proto-section { max-width: 1280px; margin: 0 auto; padding: 28px 24px 48px; }
+  .proto-head { margin: 8px 0 16px; }
+  .proto-head h2 { font-size: 18px; color: var(--text-primary); }
+  .proto-head h2 .no { display: inline-block; background: var(--primary); color: #fff; border-radius: 6px; font-size: 12px; padding: 2px 8px; margin-right: 8px; vertical-align: 2px; }
+  .proto-head p { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .proto-head .issue-link { color: var(--primary); text-decoration: none; }
+  .proto-head .issue-link:hover { text-decoration: underline; }
+
+  /* ============ 浏览器窗口 mock ============ */
+  .window { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-mid); overflow: hidden; margin-bottom: 16px; }
+  .window-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f3f6fb; border-bottom: 1px solid var(--border-light); }
+  .window-dots { display: flex; gap: 5px; }
+  .window-dots i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+  .window-dots i:nth-child(1) { background: #f26d6d; } .window-dots i:nth-child(2) { background: #f2c94c; } .window-dots i:nth-child(3) { background: #57bb5a; }
+  .window-url { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font-size: 11px; color: var(--text-muted); padding: 3px 10px; font-family: var(--mono); }
+  .window-body { min-height: 420px; }
+
+  /* ============ 应用顶栏 ============ */
+  .app-topbar { height: 48px; background: var(--surface); border-bottom: 1px solid var(--header-border); display: flex; align-items: center; padding: 0 16px; gap: 20px; }
+  .app-topbar .brand { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+  .app-topbar .brand em { font-style: normal; color: var(--primary); }
+  .app-topbar .gnav { display: flex; gap: 2px; height: 100%; }
+  .app-topbar .gnav a { display: flex; align-items: center; padding: 0 14px; font-size: 13px; color: var(--text-regular); text-decoration: none; border-bottom: 2px solid transparent; }
+  .app-topbar .gnav a.on { color: var(--primary); font-weight: 600; border-bottom-color: var(--primary); }
+  .app-topbar .user { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-regular); }
+  .avatar { width: 24px; height: 24px; border-radius: 50%; background: var(--primary); color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; font-weight: 600; }
+
+  /* ============ 侧边导航 ============ */
+  .app-main { display: flex; min-height: 480px; }
+  .sidebar { width: 208px; background: var(--surface); border-right: 1px solid var(--border-light); padding: 12px 8px; flex-shrink: 0; }
+  .side-group { margin-bottom: 14px; }
+  .side-group-title { font-size: 11px; color: var(--text-muted); padding: 4px 10px 6px; }
+  .side-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 6px; font-size: 13px; color: var(--text-regular); cursor: pointer; margin-bottom: 2px; }
+  .side-item:hover { background: var(--primary-light); color: var(--primary); }
+  .side-item.on { background: var(--primary); color: #fff; font-weight: 600; }
+  .side-item.on .side-badge { background: rgba(255,255,255,.25); color: #fff; }
+  .side-item .ico { width: 16px; text-align: center; flex-shrink: 0; }
+  .side-badge { margin-left: auto; background: #eef1f5; color: var(--text-muted); font-size: 10px; border-radius: 9px; padding: 0 6px; line-height: 16px; }
+  .side-sub { margin: 2px 0 6px 26px; border-left: 2px solid var(--border-light); padding-left: 8px; }
+  .side-sub .side-item { font-size: 12px; padding: 5px 8px; }
+  .side-sub .side-item.on { background: var(--primary-light); color: var(--primary); }
+  .side-sub .side-item.on .side-badge { background: var(--primary); color: #fff; }
+
+  /* ============ 内容区 ============ */
+  .content { flex: 1; padding: 16px; min-width: 0; }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .toolbar .spacer { flex: 1; }
+
+  /* ============ 空间头 ============ */
+  .space-head { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; padding: 12px 16px; display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+  .space-head .left { min-width: 0; }
+  .space-head .title-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .space-head .title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+  .space-head .meta { font-size: 12px; color: var(--text-muted); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .space-head .right { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+  .head-chip { display: flex; flex-direction: column; gap: 1px; }
+  .head-chip .k { font-size: 11px; color: var(--text-muted); }
+  .head-chip .v { font-size: 12px; color: var(--text-regular); font-weight: 600; }
+  .progress-mini { display: flex; align-items: center; gap: 8px; }
+  .progress-mini .bar { width: 110px; height: 8px; border-radius: 4px; background: #eef1f5; overflow: hidden; }
+  .progress-mini .bar i { display: block; height: 100%; background: var(--primary); border-radius: 4px; }
+  .progress-mini .num { font-size: 13px; font-weight: 700; color: var(--primary); }
+
+  /* ============ 场景切换器 ============ */
+  .scenario-picker { display: flex; align-items: center; gap: 8px; background: var(--primary-light); border: 1px solid #c5dbff; border-radius: 8px; padding: 6px 12px; }
+  .scenario-picker .k { font-size: 11px; color: var(--text-muted); }
+  .scenario-picker .v { font-size: 13px; font-weight: 700; color: var(--primary); }
+  .scenario-picker.disabled { background: #f5f7fa; border-color: var(--border); opacity: .75; }
+  .scenario-picker.disabled .v { color: var(--text-muted); font-weight: 500; }
+  .scenario-picker .arrow { color: var(--primary); font-size: 10px; }
+  .scenario-picker.disabled .arrow { color: var(--text-muted); }
+
+  /* ============ 按钮 ============ */
+  .btn { display: inline-flex; align-items: center; gap: 5px; border-radius: 6px; font-size: 12px; padding: 6px 12px; cursor: pointer; border: 1px solid transparent; font-family: var(--font); }
+  .btn-primary { background: var(--primary); color: #fff; font-weight: 600; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-ghost { background: var(--surface); border-color: var(--border); color: var(--text-regular); }
+  .btn-ghost:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-link { color: var(--primary); background: none; font-size: 12px; padding: 2px 4px; }
+  .btn-danger-link { color: var(--danger); background: none; font-size: 12px; padding: 2px 4px; }
+  .btn-sm { padding: 4px 9px; font-size: 11px; }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+  /* ============ 标签 / 徽标 ============ */
+  .tag { display: inline-flex; align-items: center; gap: 4px; border-radius: 10px; font-size: 11px; padding: 1px 9px; white-space: nowrap; line-height: 18px; }
+  .tag-blue { background: var(--primary-light-2); color: var(--primary); }
+  .tag-orange { background: var(--warn-light); color: var(--warn-deep); }
+  .tag-green { background: var(--success-light); color: var(--success); }
+  .tag-purple { background: #f0e8ff; color: #6a3fb5; }
+  .tag-cyan { background: #e0f2fe; color: #075985; }
+  .tag-gray { background: #eef1f5; color: var(--text-muted); }
+  .tag-red { background: var(--danger-light); color: var(--danger); }
+  .dot4 { width: 8px; height: 8px; border-radius: 4px; display: inline-block; }
+
+  /* ============ 统计卡 ============ */
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; padding: 14px 16px; }
+  .stat-card .k { font-size: 12px; color: var(--text-muted); }
+  .stat-card .v { font-size: 24px; font-weight: 700; color: var(--text-primary); margin-top: 2px; }
+  .stat-card .s { font-size: 11px; color: var(--text-muted-2); margin-top: 2px; }
+  .stat-card.accent .v { color: var(--primary); }
+
+  /* ============ Panel（空间卡片） ============ */
+  .panel-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow-light); }
+  .panel .p-title { display: flex; align-items: center; gap: 8px; }
+  .panel .p-title b { font-size: 14px; color: var(--text-primary); }
+  .panel .p-code { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+  .panel .p-route { font-size: 12px; color: var(--text-regular); }
+  .panel .p-desc { font-size: 12px; color: var(--text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .panel .p-progress { display: flex; align-items: center; gap: 8px; }
+  .panel .p-progress .bar { flex: 1; height: 6px; background: #eef1f5; border-radius: 3px; overflow: hidden; }
+  .panel .p-progress .bar i { display: block; height: 100%; background: var(--primary); }
+  .panel .p-progress .num { font-size: 12px; font-weight: 700; color: var(--primary); }
+  .panel .p-foot { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-muted); }
+  .panel .p-foot .spacer { flex: 1; }
+  .panel .p-actions { display: flex; gap: 6px; align-items: center; }
+  .icon-btn { width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer; }
+  .icon-btn:hover { border-color: var(--primary); color: var(--primary); }
+
+  /* ============ 表格 mock ============ */
+  .tbl-wrap { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; overflow: hidden; }
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .tbl thead th { background: #f3f6fb; color: var(--text-primary); font-weight: 700; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border-light); white-space: nowrap; }
+  .tbl tbody td { padding: 8px 10px; border-bottom: 1px solid #eef1f5; color: var(--text-regular); vertical-align: middle; }
+  .tbl tbody tr:last-child td { border-bottom: none; }
+  .tbl tbody tr:hover { background: #fafbfc; }
+  .tbl .name { color: var(--text-primary); font-weight: 600; }
+  .tbl .muted { color: var(--text-muted); }
+  .tbl .num { font-variant-numeric: tabular-nums; }
+  .chk { width: 13px; height: 13px; border: 1px solid var(--border-strong); border-radius: 3px; display: inline-block; vertical-align: -2px; background: #fff; }
+  .chk.on { background: var(--primary); border-color: var(--primary); position: relative; }
+  .chk.on::after { content: "✓"; color: #fff; font-size: 9px; position: absolute; left: 1.5px; top: -2px; }
+  .sel-bar { display: flex; align-items: center; gap: 8px; background: var(--primary-light); border: 1px solid #c5dbff; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; color: var(--text-primary); }
+  .sel-bar .spacer { flex: 1; }
+  .pager { display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-light); }
+  .pager .spacer { flex: 1; }
+  .pager .pg { min-width: 22px; height: 22px; border-radius: 6px; border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; background: #fff; }
+  .pager .pg.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+  /* ============ 筛选栏 ============ */
+  .filter-bar { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; padding: 10px 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .fake-input { border: 1px solid var(--border); border-radius: 6px; font-size: 12px; padding: 5px 10px; color: var(--text-muted); background: #fff; display: inline-flex; align-items: center; gap: 6px; min-width: 120px; }
+  .fake-input.w { min-width: 180px; }
+  .fake-select { border: 1px solid var(--border); border-radius: 6px; font-size: 12px; padding: 5px 10px; color: var(--text-regular); background: #fff; display: inline-flex; align-items: center; gap: 10px; justify-content: space-between; }
+  .fake-select .caret { color: var(--text-muted); font-size: 10px; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; font-size: 11px; }
+  .seg span { padding: 5px 10px; color: var(--text-regular); background: #fff; }
+  .seg span.on { background: var(--primary); color: #fff; font-weight: 600; }
+
+  /* ============ 卡片 / 面板容器 ============ */
+  .card { background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; margin-bottom: 12px; }
+  .card-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border-light); font-size: 13px; font-weight: 700; color: var(--text-primary); }
+  .card-head .spacer { flex: 1; }
+  .card-head .sub { font-size: 11px; color: var(--text-muted); font-weight: 400; }
+  .card-body { padding: 14px; }
+  .section-title { font-size: 13px; font-weight: 700; color: var(--text-primary); margin: 4px 0 10px; display: flex; align-items: center; gap: 8px; }
+  .section-title::before { content: ""; width: 3px; height: 13px; background: var(--primary); border-radius: 2px; }
+
+  /* ============ 弹窗 / 抽屉 ============ */
+  .mask { position: relative; background: rgba(20,30,45,0.45); border-radius: 0 0 10px 10px; min-height: 460px; display: flex; }
+  .dialog { margin: 40px auto; background: var(--surface); border-radius: 10px; box-shadow: var(--shadow-heavy); width: 520px; max-width: calc(100% - 32px); max-height: calc(100% - 48px); display: flex; flex-direction: column; overflow: hidden; }
+  .dialog.wide { width: 640px; }
+  .dialog-head { background: var(--primary); color: #fff; padding: 12px 18px; display: flex; align-items: center; font-size: 15px; font-weight: 700; }
+  .dialog-head .close { margin-left: auto; font-weight: 400; opacity: .85; cursor: pointer; }
+  .dialog-body { padding: 16px 18px; overflow-y: auto; font-size: 13px; }
+  .dialog-foot { padding: 12px 18px; border-top: 1px solid var(--border-light); display: flex; justify-content: flex-end; gap: 8px; }
+  .drawer { margin-left: auto; width: 400px; background: var(--surface); box-shadow: -8px 0 24px rgba(0,0,0,.12); display: flex; flex-direction: column; max-height: 100%; }
+  .drawer-head { padding: 12px 16px; border-bottom: 1px solid var(--border-light); font-size: 14px; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; }
+  .drawer-head .close { margin-left: auto; color: var(--text-muted); cursor: pointer; font-weight: 400; }
+  .drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+
+  /* ============ 表单 ============ */
+  .form-row { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .form-row label { width: 88px; text-align: right; font-size: 13px; color: var(--text-regular); flex-shrink: 0; }
+  .form-row label .req { color: var(--danger); margin-right: 2px; }
+  .form-row .fake-input, .form-row .fake-select { flex: 1; }
+  .form-note { background: #fff4e5; border: 1px solid #ffd8a8; color: #9a5b00; border-radius: 6px; padding: 8px 12px; font-size: 12px; margin: 4px 0 12px; }
+  .form-note.blue { background: var(--primary-light); border-color: #c5dbff; color: #23527c; }
+
+  /* ============ 空态 ============ */
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 20px; color: var(--text-muted); }
+  .empty .icon { font-size: 34px; margin-bottom: 10px; opacity: .5; }
+  .empty .t1 { font-size: 16px; color: var(--text-regular); margin-bottom: 4px; }
+  .empty .t2 { font-size: 12px; }
+
+  /* ============ 血缘页 ============ */
+  .lineage-topbar { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--surface); border-bottom: 1px solid var(--border-light); flex-wrap: wrap; }
+  .lineage-brand { font-size: 14px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+  .lineage-brand em { font-style: normal; color: var(--primary); }
+  .search-wrap { position: relative; width: 340px; }
+  .search-input { width: 100%; border: 1px solid var(--border); border-radius: 6px; padding: 7px 12px 7px 32px; font-size: 13px; color: var(--text-primary); background: #fff url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="%238a96a3" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>') no-repeat 10px center; }
+  .search-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(26,115,232,.12); }
+  .suggest { position: absolute; top: 38px; left: 0; right: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-mid); z-index: 60; overflow: hidden; }
+  .suggest .sg-head { font-size: 11px; color: var(--text-muted); padding: 7px 12px 4px; background: #f3f6fb; }
+  .suggest .sg-item { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; color: var(--text-regular); cursor: pointer; }
+  .suggest .sg-item:hover, .suggest .sg-item.on { background: var(--primary-light); }
+  .suggest .sg-item .nm { color: var(--text-primary); font-weight: 600; }
+  .suggest .sg-item .full { color: var(--text-muted); font-family: var(--mono); font-size: 11px; }
+  .suggest .sg-item .spacer { flex: 1; }
+  .suggest .sg-empty { padding: 12px; font-size: 12px; color: var(--text-muted); text-align: center; }
+  .lineage-canvas { position: relative; background: var(--bg); min-height: 400px; }
+  .legend { position: absolute; left: 14px; bottom: 12px; background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; box-shadow: var(--shadow-light); padding: 8px 12px; display: flex; gap: 14px; font-size: 11px; color: var(--text-regular); z-index: 20; }
+  .legend .li { display: flex; align-items: center; gap: 5px; }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; border: 2px solid; }
+  .canvas-tools { position: absolute; right: 14px; top: 12px; display: flex; gap: 6px; z-index: 20; }
+  .canvas-tools .icon-btn { background: var(--surface); box-shadow: var(--shadow-light); }
+  .current-table-chip { position: absolute; left: 14px; top: 12px; background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; box-shadow: var(--shadow-light); padding: 6px 12px; font-size: 12px; color: var(--text-regular); z-index: 20; display: flex; align-items: center; gap: 8px; }
+  .current-table-chip b { color: var(--text-primary); font-family: var(--mono); font-size: 12px; }
+
+  /* ============ 对比条 ============ */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+  .compare .col { border-radius: 8px; padding: 12px 14px; font-size: 12px; }
+  .compare .col h4 { font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
+  .compare .before { background: #fdecea; border: 1px solid #f5c6c0; color: #8c2b25; }
+  .compare .after { background: var(--success-light); border: 1px solid #bfe3c9; color: #145c32; }
+  .compare ol { margin-left: 18px; }
+  .compare li { margin: 2px 0; }
+
+  /* ============ 信息架构图 ============ */
+  .ia-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .ia-box { border-radius: 8px; padding: 14px; font-size: 12px; }
+  .ia-box h4 { font-size: 13px; margin-bottom: 10px; }
+  .ia-box.old { background: #fdecea; border: 1px solid #f5c6c0; }
+  .ia-box.old h4 { color: #8c2b25; }
+  .ia-box.new { background: var(--success-light); border: 1px solid #bfe3c9; }
+  .ia-box.new h4 { color: #145c32; }
+  .ia-node { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin-bottom: 6px; color: var(--text-primary); }
+  .ia-node.grp { background: #f3f6fb; font-weight: 700; border-color: var(--border-strong); }
+  .ia-node.sub { margin-left: 22px; font-size: 11px; color: var(--text-regular); }
+  .ia-node.hl { border-color: var(--primary); color: var(--primary); background: var(--primary-light); }
+  .ia-node .t { font-size: 10px; color: var(--text-muted); font-weight: 400; margin-left: 6px; }
+  .ia-arrow { text-align: center; color: var(--text-muted); font-size: 11px; margin: 2px 0 6px; }
+  .note-inline { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+
+  /* ============ 分布条 ============ */
+  .dist-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+  .dist-row .k { width: 76px; text-align: right; color: var(--text-regular); flex-shrink: 0; }
+  .dist-row .bar { flex: 1; height: 12px; background: #eef1f5; border-radius: 3px; overflow: hidden; }
+  .dist-row .bar i { display: block; height: 100%; }
+  .dist-row .n { width: 30px; font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 600; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .module-entry { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--border-light); border-radius: 8px; padding: 12px 14px; cursor: pointer; }
+  .module-entry:hover { border-color: var(--primary); }
+  .module-entry .mi { width: 34px; height: 34px; border-radius: 8px; background: var(--primary-light); color: var(--primary); display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+  .module-entry .mt b { display: block; font-size: 13px; color: var(--text-primary); }
+  .module-entry .mt span { font-size: 11px; color: var(--text-muted); }
+  .module-entry .spacer { flex: 1; }
+  .kv { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-regular); }
+  .kv b { color: var(--text-primary); }
+  .divider { height: 1px; background: var(--border-light); margin: 10px 0; }
+  .toast { position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%); background: rgba(31,45,61,.92); color: #fff; border-radius: 8px; padding: 8px 16px; font-size: 12px; z-index: 1100; box-shadow: var(--shadow-mid); }
+</style>
+</head>
+<body>
+
+<!-- ================= 原型文档顶栏 ================= -->
+<div class="proto-topbar">
+  <div class="logo">迁移管家 <em>MigOps</em> · 界面原型 V1.0</div>
+  <nav>
+    <a href="#p0">P0 架构</a>
+    <a href="#p1">P1 概览页</a>
+    <a href="#p2">P2 空间框架</a>
+    <a href="#p3">P3 空间概览</a>
+    <a href="#p4">P4 任务迁移</a>
+    <a href="#p5">P5 任务台账</a>
+    <a href="#p6">P6 血缘管理</a>
+  </nav>
+</div>
+
+<!-- ================= P0 信息架构 ================= -->
+<section class="proto-section" id="p0">
+  <div class="proto-head">
+    <h2><span class="no">P0</span>全局框架与信息架构（现状 vs 新方案）</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I1 导航架构</a> / <a class="issue-link" href="#">I13 图标与徽标</a>：顶部 7 tab 平铺 → 侧边分组导航，任务列表/任务台账/标签管理收纳为「任务迁移」子项。</p>
+  </div>
+  <div class="ia-wrap">
+    <div class="ia-box old">
+      <h4>现状：顶部平铺导航（SpaceLayout）</h4>
+      <div class="ia-node grp">顶栏<span class="t">概览 ｜ 项目空间 ｜ 用户</span></div>
+      <div class="ia-arrow">▼ 进入空间 /space/:id</div>
+      <div class="ia-node">空间概览</div>
+      <div class="ia-node">项目资料索引</div>
+      <div class="ia-node">数据迁移</div>
+      <div class="ia-node hl">任务迁移</div>
+      <div class="ia-node hl" style="margin-left:22px;font-size:11px;">任务台账（一级平铺，实际是子能力）</div>
+      <div class="ia-node">血缘管理</div>
+      <div class="ia-node hl" style="margin-left:22px;font-size:11px;">标签管理（一级平铺，仅服务 b04）</div>
+      <div class="note-inline">问题：7 项平铺无分组无层级；父子关系被拉平；场景上下文各页面自持不共享（I2）。</div>
+    </div>
+    <div class="ia-box new">
+      <h4>新方案：侧边分组导航 + 场景常驻</h4>
+      <div class="ia-node grp">顶栏<span class="t">概览（工作台）｜ 项目空间 ｜ 用户</span></div>
+      <div class="ia-arrow">▼ 进入空间 /space/:id</div>
+      <div class="ia-node">空间概览<span class="t">落地页 + 真实统计</span></div>
+      <div class="ia-node grp">资料准备</div>
+      <div class="ia-node sub">项目资料索引</div>
+      <div class="ia-node grp">迁移执行</div>
+      <div class="ia-node sub">数据迁移</div>
+      <div class="ia-node sub hl">任务迁移<span class="t">子导航：任务列表 / 任务台账 / 标签管理</span></div>
+      <div class="ia-node grp">数据资产</div>
+      <div class="ia-node sub">血缘管理</div>
+      <div class="note-inline">空间头常驻「场景切换器」（仅 b03/b04 激活，状态空间级保持，I2）；导航带图标与数量徽标（I13）。</div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P1 概览页 ================= -->
+<section class="proto-section" id="p1">
+  <div class="proto-head">
+    <h2><span class="no">P1</span>概览页（工作台）新排版</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I3 双入口重叠</a>：Panel 区即空间统一入口，行内管理操作（编辑/成员/状态）直接暴露，与 /b01/spaces 管理页打通复用。</p>
+  </div>
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/</div></div>
+    <div class="app-topbar">
+      <div class="brand">迁移管家 <em>MigOps</em></div>
+      <div class="gnav"><a class="on">概览</a><a>项目空间</a></div>
+      <div class="user"><div class="avatar">岳</div>岳凯 · L0 系统管理员</div>
+    </div>
+    <div class="content">
+      <div class="stat-row">
+        <div class="stat-card"><div class="k">全部空间</div><div class="v">8</div><div class="s">L0 可见全部</div></div>
+        <div class="stat-card accent"><div class="k">交付中</div><div class="v">5</div><div class="s">初始化 2 · 已验收 1</div></div>
+        <div class="stat-card"><div class="k">我参与的空间</div><div class="v">6</div><div class="s">L1×3 / L2×3</div></div>
+        <div class="stat-card"><div class="k">本周更新</div><div class="v">4</div><div class="s">空间 · 按 updated_at</div></div>
+      </div>
+      <div class="toolbar">
+        <div class="fake-input w">🔍 搜索项目名称 / 简称</div>
+        <div class="fake-select">状态：全部 <span class="caret">▾</span></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary">＋ 创建迁移空间</button>
+      </div>
+      <div class="panel-grid">
+        <div class="panel">
+          <div class="p-title"><b>华为云大数据迁移</b><span class="tag tag-blue">交付中</span></div>
+          <div class="p-code">hw_bigdata</div>
+          <div class="p-route">华为云 → 腾讯云</div>
+          <div class="p-desc">客户侧 Hive 数仓整体迁移至腾讯云 TBDS，含元数据、历史数据与增量链路改造。</div>
+          <div class="p-progress"><div class="bar"><i style="width:68%"></i></div><span class="num">68%</span></div>
+          <div class="p-foot">我的角色：L1 · 成员 8 人 · 最近更新：2026-10-22</div>
+          <div class="p-actions">
+            <button class="btn btn-primary btn-sm">进入空间</button>
+            <button class="icon-btn" title="编辑空间">✎</button>
+            <button class="icon-btn" title="成员管理">👥</button>
+            <div class="spacer"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="p-title"><b>星环数据库迁移</b><span class="tag tag-orange">初始化</span></div>
+          <div class="p-code">transwarp_db</div>
+          <div class="p-route">星环 TDH → 腾讯云</div>
+          <div class="p-desc">Transwarp Inceptor 集群迁移，一期完成元数据与基础表梳理。</div>
+          <div class="p-progress"><div class="bar"><i style="width:12%"></i></div><span class="num">12%</span></div>
+          <div class="p-foot">我的角色：L2 · 成员 3 人 · 最近更新：2026-10-20</div>
+          <div class="p-actions">
+            <button class="btn btn-primary btn-sm">进入空间</button>
+            <button class="icon-btn" title="编辑空间">✎</button>
+            <button class="icon-btn" title="成员管理">👥</button>
+            <div class="spacer"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="p-title"><b>阿里云 MaxCompute 迁移</b><span class="tag tag-green">已验收</span></div>
+          <div class="p-code">ali_mc</div>
+          <div class="p-route">阿里云 → 腾讯云</div>
+          <div class="p-desc">MaxCompute → DLC 迁移项目，已完成客户验收。</div>
+          <div class="p-progress"><div class="bar"><i style="width:100%"></i></div><span class="num">100%</span></div>
+          <div class="p-foot">我的角色：L1 · 成员 6 人 · 最近更新：2026-10-08</div>
+          <div class="p-actions">
+            <button class="btn btn-primary btn-sm">进入空间</button>
+            <button class="icon-btn" title="编辑空间">✎</button>
+            <button class="icon-btn" title="成员管理">👥</button>
+            <div class="spacer"></div>
+          </div>
+        </div>
+      </div>
+      <p class="note-inline" style="margin-top:10px">说明：整体进展为「项目自评」（手工维护，见 P3）；L2 用户仅见被加入的空间，创建按钮隐藏，空态提示「请联系项目管理员」。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P2 空间视图框架 ================= -->
+<section class="proto-section" id="p2">
+  <div class="proto-head">
+    <h2><span class="no">P2</span>空间视图新框架：侧边分组导航 + 空间头分区 + 场景切换器</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I1</a> / <a class="issue-link" href="#">I2</a> / <a class="issue-link" href="#">I12</a> / <a class="issue-link" href="#">I13</a>。场景切换器在资料/血缘等非场景模块呈置灰态（有场景概念的仅 b03/b04）。</p>
+  </div>
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/space/12（空间概览）</div></div>
+    <div class="app-topbar">
+      <div class="brand">迁移管家 <em>MigOps</em></div>
+      <div class="gnav"><a>概览</a><a class="on">项目空间</a></div>
+      <div class="user"><div class="avatar">岳</div>岳凯 · L1 项目管理员</div>
+    </div>
+    <div class="app-main">
+      <aside class="sidebar">
+        <div class="side-group">
+          <div class="side-item on"><span class="ico">🏠</span>空间概览</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">资料准备</div>
+          <div class="side-item"><span class="ico">📄</span>项目资料索引<span class="side-badge">24</span></div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">迁移执行</div>
+          <div class="side-item"><span class="ico">🗄️</span>数据迁移</div>
+          <div class="side-item"><span class="ico">⚙️</span>任务迁移</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">数据资产</div>
+          <div class="side-item"><span class="ico">🕸️</span>血缘管理</div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="space-head">
+          <div class="left">
+            <div class="title-row">
+              <span class="title">华为云大数据迁移</span>
+              <span class="tag tag-blue">交付中</span>
+              <span class="p-code">hw_bigdata</span>
+            </div>
+            <div class="meta">华为云 → 腾讯云 <span class="dot4" style="background:var(--border-strong)"></span> 客户：某银行 <span class="dot4" style="background:var(--border-strong)"></span> 2026-06-01 ~ 2026-12-31</div>
+          </div>
+          <div class="right">
+            <div class="scenario-picker disabled" title="当前页面无场景概念，进入数据迁移/任务迁移后激活">
+              <span class="k">当前场景</span><span class="v">未选择</span><span class="arrow">▾</span>
+            </div>
+            <div class="head-chip"><span class="k">我的角色</span><span class="v">L1 项目管理员</span></div>
+            <div class="head-chip"><span class="k">成员</span><span class="v">8 人</span></div>
+            <div class="head-chip"><span class="k">整体进展（自评）</span>
+              <div class="progress-mini"><div class="bar"><i style="width:68%"></i></div><span class="num">68%</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="empty" style="background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:36px">
+          <div class="t1">空间概览内容区</div>
+          <div class="t2">真实统计 + 模块入口 → 详见 P3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P3 空间概览 ================= -->
+<section class="proto-section" id="p3">
+  <div class="proto-head">
+    <h2><span class="no">P3</span>空间概览页：真实统计区 + 项目自评</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I8 进展数据割裂</a>：空间内 b03/b04 真实进度数据聚合展示，手工「整体进展」降级为「项目自评」并列呈现，不再只有一个来源。</p>
+  </div>
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/space/12（空间概览）</div></div>
+    <div class="app-main">
+      <aside class="sidebar">
+        <div class="side-group">
+          <div class="side-item on"><span class="ico">🏠</span>空间概览</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">资料准备</div>
+          <div class="side-item"><span class="ico">📄</span>项目资料索引<span class="side-badge">24</span></div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">迁移执行</div>
+          <div class="side-item"><span class="ico">🗄️</span>数据迁移</div>
+          <div class="side-item"><span class="ico">⚙️</span>任务迁移</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">数据资产</div>
+          <div class="side-item"><span class="ico">🕸️</span>血缘管理</div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="space-head">
+          <div class="left">
+            <div class="title-row"><span class="title">华为云大数据迁移</span><span class="tag tag-blue">交付中</span><span class="p-code">hw_bigdata</span></div>
+            <div class="meta">华为云 → 腾讯云 <span class="dot4" style="background:var(--border-strong)"></span> 客户：某银行</div>
+          </div>
+          <div class="right">
+            <div class="head-chip"><span class="k">我的角色</span><span class="v">L1</span></div>
+            <div class="head-chip"><span class="k">成员</span><span class="v">8 人</span></div>
+          </div>
+        </div>
+
+        <div class="section-title">业务进展（真实数据聚合）</div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head">数据迁移（b03）<span class="spacer"></span><span class="sub">2 个场景</span></div>
+            <div class="card-body">
+              <div class="dist-row"><span class="k">元数据已完成</span><div class="bar"><i style="width:64%;background:var(--success)"></i></div><span class="n">63</span></div>
+              <div class="dist-row"><span class="k">全量已完成</span><div class="bar"><i style="width:51%;background:var(--primary)"></i></div><span class="n">50</span></div>
+              <div class="dist-row"><span class="k">增量进行中</span><div class="bar"><i style="width:42%;background:var(--warn)"></i></div><span class="n">41</span></div>
+              <div class="dist-row"><span class="k">异常</span><div class="bar"><i style="width:3%;background:var(--danger)"></i></div><span class="n">3</span></div>
+              <div class="kv"><span>库表合计 <b>98</b></span><span>迁移记录 <b>216</b> 条</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head">任务迁移（b04）<span class="spacer"></span><span class="sub">3 个场景</span></div>
+            <div class="card-body">
+              <div class="dist-row"><span class="k">客户验收通过</span><div class="bar"><i style="width:38%;background:var(--success)"></i></div><span class="n">112</span></div>
+              <div class="dist-row"><span class="k">调度成功</span><div class="bar"><i style="width:47%;background:var(--primary)"></i></div><span class="n">139</span></div>
+              <div class="dist-row"><span class="k">改造完成</span><div class="bar"><i style="width:26%;background:var(--warn)"></i></div><span class="n">77</span></div>
+              <div class="dist-row"><span class="k">校验不通过</span><div class="bar"><i style="width:5%;background:var(--danger)"></i></div><span class="n">15</span></div>
+              <div class="kv"><span>任务合计 <b>295</b></span><span>排查备注 <b>48</b> 条</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title" style="margin-top:14px">项目自评（手工维护，仅 L0/L1 可改）</div>
+        <div class="card"><div class="card-body" style="display:flex;align-items:center;gap:16px">
+          <div class="progress-mini" style="flex:1"><div class="bar" style="width:100%;height:10px"><i style="width:68%"></i></div><span class="num" style="font-size:15px">68%</span></div>
+          <span style="font-size:12px;color:var(--text-muted)">与上方真实统计并列展示；二期可切换为按任务完成率自动计算（保留手工覆盖，D13）</span>
+          <button class="btn btn-ghost btn-sm">编辑</button>
+        </div></div>
+
+        <div class="section-title" style="margin-top:14px">模块入口</div>
+        <div class="grid-3">
+          <div class="module-entry"><div class="mi">📄</div><div class="mt"><b>项目资料索引</b><span>24 条资料 · 3 个分类</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+          <div class="module-entry"><div class="mi">🗄️</div><div class="mt"><b>数据迁移</b><span>2 个场景 · 98 张库表</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+          <div class="module-entry"><div class="mi">⚙️</div><div class="mt"><b>任务迁移</b><span>3 个场景 · 295 个任务</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+          <div class="module-entry"><div class="mi">📋</div><div class="mt"><b>任务台账</b><span>12 个台账 · 固化 5</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+          <div class="module-entry"><div class="mi">🏷️</div><div class="mt"><b>标签管理</b><span>18 个标签 · 技术 12 / 管理 6</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+          <div class="module-entry"><div class="mi">🕸️</div><div class="mt"><b>血缘管理</b><span>4 个工作流 · 512 条血缘边</span></div><div class="spacer"></div><span style="color:var(--text-muted)">›</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P4 任务迁移模块 ================= -->
+<section class="proto-section" id="p4">
+  <div class="proto-head">
+    <h2><span class="no">P4</span>任务迁移模块：子导航 + 任务列表（场景上下文常驻 + 内联打标）</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I1</a> / <a class="issue-link" href="#">I2</a>：任务列表 / 任务台账 / 标签管理收纳为子导航；场景切换器在空间头激活且跨页面保持。</p>
+  </div>
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/space/12/tasks（任务迁移 · holo→starrocks）</div></div>
+    <div class="app-main">
+      <aside class="sidebar">
+        <div class="side-group">
+          <div class="side-item"><span class="ico">🏠</span>空间概览</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">资料准备</div>
+          <div class="side-item"><span class="ico">📄</span>项目资料索引<span class="side-badge">24</span></div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">迁移执行</div>
+          <div class="side-item"><span class="ico">🗄️</span>数据迁移</div>
+          <div class="side-item on"><span class="ico">⚙️</span>任务迁移</div>
+          <div class="side-sub">
+            <div class="side-item on">任务列表<span class="side-badge">295</span></div>
+            <div class="side-item">任务台账<span class="side-badge">12</span></div>
+            <div class="side-item">标签管理<span class="side-badge">18</span></div>
+          </div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">数据资产</div>
+          <div class="side-item"><span class="ico">🕸️</span>血缘管理</div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="space-head">
+          <div class="left">
+            <div class="title-row"><span class="title">华为云大数据迁移</span><span class="tag tag-blue">交付中</span></div>
+            <div class="meta">华为云 → 腾讯云 <span class="dot4" style="background:var(--border-strong)"></span> 我的角色：L1</div>
+          </div>
+          <div class="right">
+            <div class="scenario-picker">
+              <span class="k">当前场景</span><span class="v">holo→starrocks</span><span class="arrow">▾</span>
+            </div>
+            <div class="head-chip"><span class="k">切换场景不丢失，跨导航保持（I2）</span></div>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <div class="fake-input w">🔍 任务名称 / 任务 URI</div>
+          <div class="fake-select">工作流：全部 <span class="caret">▾</span></div>
+          <div class="fake-select">Owner：全部 <span class="caret">▾</span></div>
+          <div class="fake-select">迁移状态：全部 <span class="caret">▾</span></div>
+          <div class="fake-select">标签：未选 <span class="caret">▾</span></div>
+          <div class="seg"><span class="on">全部 AND</span><span>任一 OR</span></div>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost">导入台账</button>
+          <button class="btn btn-ghost">导出</button>
+          <button class="btn btn-primary">保存为台账</button>
+        </div>
+
+        <div class="sel-bar">
+          <span class="chk"></span>已选 <b>3</b> 项
+          <div class="spacer"></div>
+          <button class="btn btn-ghost btn-sm">批量状态流转</button>
+          <button class="btn btn-ghost btn-sm">批量打标签</button>
+          <button class="btn btn-primary btn-sm">添加到台账（3）</button>
+          <button class="btn btn-ghost btn-sm">创建台账（勾选固化）</button>
+        </div>
+
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:34px"><span class="chk on"></span></th>
+              <th>任务</th><th>工作流</th><th>Owner</th><th>迁移状态</th><th>调度状态</th><th>校验状态</th><th>标签</th><th style="width:110px">操作</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="chk on"></span></td>
+                <td><div class="name">ads_user_profile_dws</div><div class="muted mono" style="font-size:11px">holo://ads_user_profile_dws@wf_user</div></td>
+                <td>wf_user</td><td>张三</td>
+                <td><span class="tag tag-green">调度成功</span></td>
+                <td><span class="tag tag-green">调度成功</span></td>
+                <td><span class="tag tag-green">校验通过</span></td>
+                <td><span class="tag tag-blue">核心表</span> <span class="tag tag-purple">P0</span> <span class="tag tag-gray" style="cursor:pointer">＋</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">备注</button></td>
+              </tr>
+              <tr>
+                <td><span class="chk on"></span></td>
+                <td><div class="name">dws_order_amt_1d</div><div class="muted mono" style="font-size:11px">holo://dws_order_amt_1d@wf_order</div></td>
+                <td>wf_order</td><td>李四</td>
+                <td><span class="tag tag-blue">改造完成</span></td>
+                <td><span class="tag tag-orange">调度中</span></td>
+                <td><span class="tag tag-gray">未校验</span></td>
+                <td><span class="tag tag-cyan">Holo 引擎</span> <span class="tag tag-gray" style="cursor:pointer">＋</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">备注</button></td>
+              </tr>
+              <tr>
+                <td><span class="chk on"></span></td>
+                <td><div class="name">dws_sku_sales_sum</div><div class="muted mono" style="font-size:11px">holo://dws_sku_sales_sum@wf_order</div></td>
+                <td>wf_order</td><td>李四</td>
+                <td><span class="tag tag-blue">改造完成</span></td>
+                <td><span class="tag tag-gray">未提交</span></td>
+                <td><span class="tag tag-red">校验不通过</span></td>
+                <td><span class="tag tag-orange">待重构</span> <span class="tag tag-gray" style="cursor:pointer">＋</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">备注</button></td>
+              </tr>
+              <tr>
+                <td><span class="chk"></span></td>
+                <td><div class="name">ads_gmv_month_report</div><div class="muted mono" style="font-size:11px">holo://ads_gmv_month_report@wf_report</div></td>
+                <td>wf_report</td><td>王五</td>
+                <td><span class="tag tag-gray">未开始</span></td>
+                <td><span class="tag tag-gray">未提交</span></td>
+                <td><span class="tag tag-gray">未校验</span></td>
+                <td><span class="tag tag-gray" style="cursor:pointer">＋</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">备注</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="pager">共 295 条<div class="spacer"></div><span class="pg">‹</span><span class="pg on">1</span><span class="pg">2</span><span class="pg">3</span><span class="pg">…</span><span class="pg">30</span><span class="pg">›</span> 20 条/页 ▾</div>
+        </div>
+        <p class="note-inline" style="margin-top:8px">「标签」列色块 + 文字胶囊（§6.4.2）；「＋」内联打标仅选已有标签（A13）；勾选后底部操作条提供「添加到台账 / 创建台账」两种入口（台账需求 D3）。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P5 任务台账 ================= -->
+<section class="proto-section" id="p5">
+  <div class="proto-head">
+    <h2><span class="no">P5</span>任务台账：清单 + 详情 + 内嵌「补充任务」抽屉</h2>
+    <p>对应评审问题 <a class="issue-link" href="#">I4 补充任务跳转链路</a> / <a class="issue-link" href="#">I5 概念复杂</a> / <a class="issue-link" href="#">I6 路由层级</a>。路由统一为 <span class="mono">/space/:id/tasks/ledgers</span> 与 <span class="mono">/space/:id/tasks/ledgers/:viewId</span>。</p>
+  </div>
+
+  <div class="compare">
+    <div class="col before">
+      <h4>Before：补充任务整页跳转（5 步）</h4>
+      <ol>
+        <li>台账详情页点「补充任务」</li>
+        <li>整页跳转任务列表（query 带上下文）</li>
+        <li>搜索 + 勾选任务</li>
+        <li>「添加到台账」弹窗确认</li>
+        <li>依赖路由逻辑返回原台账</li>
+      </ol>
+    </div>
+    <div class="col after">
+      <h4>After：抽屉内嵌完成（3 步，不离开页面）</h4>
+      <ol>
+        <li>台账详情页点「补充任务」→ 右侧抽屉打开</li>
+        <li>抽屉内搜索勾选（默认仅展示当前场景未入账任务）</li>
+        <li>确认 → 原地刷新台账，动态台账弹出「转为固定名单」显式告知</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/space/12/tasks/ledgers/8（任务台账 · 核心表改造清单）</div></div>
+    <div class="app-main">
+      <aside class="sidebar">
+        <div class="side-group">
+          <div class="side-item"><span class="ico">🏠</span>空间概览</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">资料准备</div>
+          <div class="side-item"><span class="ico">📄</span>项目资料索引</div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">迁移执行</div>
+          <div class="side-item"><span class="ico">🗄️</span>数据迁移</div>
+          <div class="side-item on"><span class="ico">⚙️</span>任务迁移</div>
+          <div class="side-sub">
+            <div class="side-item">任务列表<span class="side-badge">295</span></div>
+            <div class="side-item on">任务台账<span class="side-badge">12</span></div>
+            <div class="side-item">标签管理<span class="side-badge">18</span></div>
+          </div>
+        </div>
+        <div class="side-group">
+          <div class="side-group-title">数据资产</div>
+          <div class="side-item"><span class="ico">🕸️</span>血缘管理</div>
+        </div>
+      </aside>
+      <div class="content">
+        <div class="space-head">
+          <div class="left">
+            <div class="title-row"><span class="title">华为云大数据迁移</span><span class="tag tag-blue">交付中</span></div>
+            <div class="meta">场景：holo→starrocks · 我的角色：L1</div>
+          </div>
+          <div class="right">
+            <div class="scenario-picker"><span class="k">当前场景</span><span class="v">holo→starrocks</span><span class="arrow">▾</span></div>
+          </div>
+        </div>
+
+        <div class="filter-bar">
+          <div class="fake-input w">🔍 任务名称 / URI</div>
+          <div class="fake-select">工作流：全部 <span class="caret">▾</span></div>
+          <div class="fake-select">Owner：全部 <span class="caret">▾</span></div>
+          <div class="fake-select">标签：未选 <span class="caret">▾</span></div>
+          <div class="seg"><span class="on">全部 AND</span><span>任一 OR</span></div>
+          <div class="spacer"></div>
+          <button class="btn btn-ghost">导出</button>
+          <button class="btn btn-primary">＋ 补充任务</button>
+        </div>
+
+        <div class="form-note blue" style="display:flex;align-items:center;gap:8px">
+          <span class="tag tag-purple">固定名单</span>
+          <span>台账「<b>核心表改造清单</b>」· 成员 3（已锁定）· 动态台账补充/移除任务时将<b>显式提示</b>转为固定名单（I5）</span>
+        </div>
+
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr>
+              <th style="width:34px"><span class="chk"></span></th>
+              <th>任务</th><th>工作流</th><th>Owner</th><th>迁移状态</th><th>调度状态</th><th>标签</th><th style="width:150px">操作</th>
+            </tr></thead>
+            <tbody>
+              <tr>
+                <td><span class="chk"></span></td>
+                <td><div class="name">ads_user_profile_dws</div><div class="muted mono" style="font-size:11px">holo://ads_user_profile_dws@wf_user</div></td>
+                <td>wf_user</td><td>张三</td>
+                <td><span class="tag tag-green">调度成功</span></td><td><span class="tag tag-green">调度成功</span></td>
+                <td><span class="tag tag-blue">核心表</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">从台账移除</button></td>
+              </tr>
+              <tr>
+                <td><span class="chk"></span></td>
+                <td><div class="name">dws_order_amt_1d</div><div class="muted mono" style="font-size:11px">holo://dws_order_amt_1d@wf_order</div></td>
+                <td>wf_order</td><td>李四</td>
+                <td><span class="tag tag-blue">改造完成</span></td><td><span class="tag tag-orange">调度中</span></td>
+                <td><span class="tag tag-cyan">Holo 引擎</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">从台账移除</button></td>
+              </tr>
+              <tr>
+                <td><span class="chk"></span></td>
+                <td><div class="name">dws_sku_sales_sum</div><div class="muted mono" style="font-size:11px">holo://dws_sku_sales_sum@wf_order</div></td>
+                <td>wf_order</td><td>李四</td>
+                <td><span class="tag tag-blue">改造完成</span></td><td><span class="tag tag-gray">未提交</span></td>
+                <td><span class="tag tag-orange">待重构</span></td>
+                <td><button class="btn-link">详情</button><button class="btn-link">从台账移除</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="pager">共 3 条<div class="spacer"></div><span class="pg">‹</span><span class="pg on">1</span><span class="pg">›</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 补充任务抽屉 -->
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">同页 · 「补充任务」抽屉（不离开台账详情页）</div></div>
+    <div class="mask" style="min-height:400px">
+      <div style="flex:1;padding:18px;color:#fff">
+        <div style="background:rgba(255,255,255,.14);border-radius:8px;padding:12px 16px;max-width:460px">
+          <b style="font-size:13px">台账详情页（保持可读）</b>
+          <p style="font-size:12px;margin-top:4px;opacity:.9">抽屉从右侧滑出，覆盖内容区右半侧；背景内容保留可见，避免「跳走」的迷失感（I4）。</p>
+        </div>
+      </div>
+      <div class="drawer">
+        <div class="drawer-head">补充任务 · 核心表改造清单 <span class="close">✕</span></div>
+        <div class="drawer-body">
+          <div class="form-note blue">默认展示当前场景 <b>holo→starrocks</b> 中<b>尚未加入本台账</b>的任务</div>
+          <div class="filter-bar" style="padding:0;border:none;margin-bottom:10px">
+            <div class="fake-input" style="flex:1">🔍 任务名称 / URI</div>
+            <div class="fake-select">工作流 <span class="caret">▾</span></div>
+            <div class="fake-select">状态 <span class="caret">▾</span></div>
+          </div>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th style="width:34px"><span class="chk"></span></th><th>任务</th><th>工作流</th><th>Owner</th><th>迁移状态</th></tr></thead>
+              <tbody>
+                <tr><td><span class="chk on"></span></td><td class="name">ads_gmv_month_report</td><td>wf_report</td><td>王五</td><td><span class="tag tag-gray">未开始</span></td></tr>
+                <tr><td><span class="chk"></span></td><td class="name">dws_user_active_1d</td><td>wf_user</td><td>张三</td><td><span class="tag tag-blue">改造完成</span></td></tr>
+                <tr><td><span class="chk on"></span></td><td class="name">dws_refund_amt_1d</td><td>wf_order</td><td>李四</td><td><span class="tag tag-blue">改造完成</span></td></tr>
+                <tr><td><span class="chk"></span></td><td class="name">ads_channel_roi</td><td>wf_report</td><td>王五</td><td><span class="tag tag-gray">未开始</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="dialog-foot" style="border-top:1px solid var(--border-light)">
+          <span style="margin-right:auto;font-size:12px;color:var(--text-muted)">已选 <b style="color:var(--primary)">2</b> 项</span>
+          <button class="btn btn-ghost">取消</button>
+          <button class="btn btn-primary">加入台账</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= P6 血缘管理 ================= -->
+<section class="proto-section" id="p6">
+  <div class="proto-head">
+    <h2><span class="no">P6</span>血缘管理：检索驱动空态 + 检索感应提示（复刻参考实现）</h2>
+    <p>对应《完整需求文档》§5.4（血缘 V2.0，D3 检索驱动 + 手写 SVG）与评审问题 <a class="issue-link" href="#">I7 与 b04 联动</a>：检索栏输入即出感应提示（正式表 + 工作流名，含类型/项目/任务类型标签）；图例仅颜色图例（D6 无开关）。</p>
+  </div>
+  <div class="window">
+    <div class="window-bar"><div class="window-dots"><i></i><i></i><i></i></div><div class="window-url">https://migops.example.com/space/12/lineage</div></div>
+    <div class="lineage-topbar">
+      <div class="lineage-brand">数据血缘 <em>Lineage</em></div>
+      <div class="search-wrap">
+        <input class="search-input" value="ads_user" readonly>
+        <div class="suggest">
+          <div class="sg-head">正式表</div>
+          <div class="sg-item on">
+            <span class="tag tag-blue">正式表</span>
+            <span class="nm">ads_user_profile_dws</span>
+            <span class="full">mig_hw.ads_user_profile_dws</span>
+            <span class="spacer"></span>
+            <span class="tag tag-purple">用户域</span>
+            <span class="tag tag-cyan">SQL</span>
+          </div>
+          <div class="sg-item">
+            <span class="tag tag-blue">正式表</span>
+            <span class="nm">ads_user_retain_1d</span>
+            <span class="full">mig_hw.ads_user_retain_1d</span>
+            <span class="spacer"></span>
+            <span class="tag tag-purple">用户域</span>
+            <span class="tag tag-cyan">PySpark</span>
+          </div>
+          <div class="sg-head">工作流</div>
+          <div class="sg-item">
+            <span class="tag tag-green">⚙ 工作流</span>
+            <span class="nm">wf_user_profile</span>
+            <span class="spacer"></span>
+            <span class="muted" style="font-size:11px">涉及 12 张表 · 入口表 ads_user_profile_dws</span>
+          </div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted)">↑↓ 导航 · 回车确认 · 仅检索正式表</div>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm">工作流管理 ▾</button>
+        <button class="btn btn-ghost btn-sm">新增工作流血缘</button>
+      </div>
+    </div>
+    <div class="lineage-canvas">
+      <div class="current-table-chip">当前表：<b>mig_hw.ads_user_profile_dws</b><span class="tag tag-green">聚焦</span></div>
+      <div class="canvas-tools">
+        <button class="icon-btn" title="放大">＋</button>
+        <button class="icon-btn" title="缩小">－</button>
+        <button class="icon-btn" title="适应屏幕">⤢</button>
+        <button class="icon-btn" title="导出 PNG">⬇</button>
+      </div>
+
+      <!-- 检索驱动分层 DAG（手写 SVG 示意） -->
+      <svg viewBox="0 0 760 400" style="width:100%;height:400px;display:block">
+        <defs>
+          <marker id="arrUp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#c2a36b"></path>
+          </marker>
+          <marker id="arrDown" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#9aa7b5"></path>
+          </marker>
+        </defs>
+
+        <!-- 上游连线（琥珀：数据流入） -->
+        <path d="M150 130 L250 130 L250 170 L310 170" fill="none" stroke="#c2a36b" stroke-width="1.6" marker-end="url(#arrUp)"></path>
+        <path d="M150 230 L210 230 L210 200 L310 200" fill="none" stroke="#c2a36b" stroke-width="1.6" marker-end="url(#arrUp)"></path>
+        <path d="M150 320 L250 320 L250 230 L310 230" fill="none" stroke="#c2a36b" stroke-width="1.6" marker-end="url(#arrUp)"></path>
+        <!-- 下游连线（灰蓝：数据流出） -->
+        <path d="M470 170 L530 170 L530 130 L590 130" fill="none" stroke="#9aa7b5" stroke-width="1.6" marker-end="url(#arrDown)"></path>
+        <path d="M470 200 L530 200 L530 230 L590 230" fill="none" stroke="#9aa7b5" stroke-width="1.6" marker-end="url(#arrDown)"></path>
+        <path d="M470 230 L530 230 L530 320 L590 320" fill="none" stroke="#9aa7b5" stroke-width="1.6" marker-end="url(#arrDown)"></path>
+
+        <!-- 上游节点（正式表：蓝） -->
+        <g>
+          <rect x="30" y="102" width="120" height="56" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5"></rect>
+          <text x="90" y="124" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">dws_user_info</text>
+          <text x="90" y="142" text-anchor="middle" font-size="10" fill="#8a96a3">mig_hw</text>
+          <circle cx="150" cy="130" r="9" fill="#fff" stroke="#1a73e8" stroke-width="1.5"></circle>
+          <text x="150" y="134" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">−</text>
+          <circle cx="166" cy="122" r="7" fill="#1a73e8"></circle>
+          <text x="166" y="125.5" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">3</text>
+        </g>
+        <g>
+          <rect x="30" y="202" width="120" height="56" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5"></rect>
+          <text x="90" y="224" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">ods_user_login</text>
+          <text x="90" y="242" text-anchor="middle" font-size="10" fill="#8a96a3">mig_hw</text>
+          <circle cx="150" cy="230" r="9" fill="#fff" stroke="#1a73e8" stroke-width="1.5"></circle>
+          <text x="150" y="234" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">＋</text>
+          <circle cx="166" cy="222" r="7" fill="#1a73e8"></circle>
+          <text x="166" y="225.5" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">2</text>
+        </g>
+        <g>
+          <rect x="30" y="292" width="120" height="56" rx="8" fill="#fef7e0" stroke="#f2a100" stroke-width="1.5"></rect>
+          <text x="90" y="314" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">tmp_user_stg</text>
+          <text x="90" y="332" text-anchor="middle" font-size="10" fill="#b06a00">临时表 · wf_user_profile</text>
+          <circle cx="150" cy="320" r="9" fill="#fff" stroke="#f2a100" stroke-width="1.5"></circle>
+          <text x="150" y="324" text-anchor="middle" font-size="11" font-weight="700" fill="#b06a00">＋</text>
+        </g>
+
+        <!-- 当前聚焦表（绿描边） -->
+        <g>
+          <rect x="310" y="142" width="160" height="86" rx="8" fill="#fff" stroke="#188038" stroke-width="2.2"></rect>
+          <text x="390" y="168" text-anchor="middle" font-size="12" font-weight="700" fill="#1f2d3d">ads_user_profile_dws</text>
+          <text x="390" y="186" text-anchor="middle" font-size="10" fill="#8a96a3">mig_hw</text>
+          <text x="390" y="206" text-anchor="middle" font-size="9" fill="#188038">当前表 · 已展开上游 3 · 下游 3</text>
+          <circle cx="310" cy="170" r="9" fill="#fff" stroke="#188038" stroke-width="1.5"></circle>
+          <text x="310" y="174" text-anchor="middle" font-size="11" font-weight="700" fill="#188038">−</text>
+          <circle cx="296" cy="162" r="7" fill="#188038"></circle>
+          <text x="296" y="165.5" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">3</text>
+          <circle cx="470" cy="170" r="9" fill="#fff" stroke="#188038" stroke-width="1.5"></circle>
+          <text x="470" y="174" text-anchor="middle" font-size="11" font-weight="700" fill="#188038">＋</text>
+          <circle cx="484" cy="162" r="7" fill="#188038"></circle>
+          <text x="484" y="165.5" text-anchor="middle" font-size="9" font-weight="700" fill="#fff">3</text>
+        </g>
+
+        <!-- 下游节点 -->
+        <g>
+          <rect x="590" y="102" width="130" height="56" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5"></rect>
+          <text x="655" y="124" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">ads_user_retain</text>
+          <text x="655" y="142" text-anchor="middle" font-size="10" fill="#8a96a3">mig_hw</text>
+          <circle cx="590" cy="130" r="9" fill="#fff" stroke="#1a73e8" stroke-width="1.5"></circle>
+          <text x="590" y="134" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">−</text>
+        </g>
+        <g>
+          <rect x="590" y="202" width="130" height="56" rx="8" fill="#e8f0fe" stroke="#1a73e8" stroke-width="1.5"></rect>
+          <text x="655" y="224" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">ads_user_tag</text>
+          <text x="655" y="242" text-anchor="middle" font-size="10" fill="#8a96a3">mig_hw</text>
+          <circle cx="590" cy="230" r="9" fill="#fff" stroke="#1a73e8" stroke-width="1.5"></circle>
+          <text x="590" y="234" text-anchor="middle" font-size="11" font-weight="700" fill="#1a73e8">＋</text>
+        </g>
+        <g>
+          <rect x="590" y="292" width="130" height="56" rx="8" fill="#fef7e0" stroke="#f2a100" stroke-width="1.5"></rect>
+          <text x="655" y="314" text-anchor="middle" font-size="11" font-weight="700" fill="#1f2d3d">tmp_user_out</text>
+          <text x="655" y="332" text-anchor="middle" font-size="10" fill="#b06a00">临时表 · wf_user_profile</text>
+        </g>
+      </svg>
+
+      <!-- 图例：仅颜色图例（D6 无开关） -->
+      <div class="legend">
+        <span class="li"><span class="sw" style="border-color:#1a73e8;background:#e8f0fe"></span>正式表</span>
+        <span class="li"><span class="sw" style="border-color:#f2a100;background:#fef7e0"></span>临时表</span>
+        <span class="li"><span class="sw" style="border-color:#188038;background:#fff"></span>当前表</span>
+        <span class="li" style="color:var(--text-muted)">← 上游（流入）｜下游（流出）→</span>
+      </div>
+    </div>
+    <div style="padding:10px 14px;border-top:1px solid var(--border-light);font-size:11px;color:var(--text-muted)">
+      节点 ＋/− 带邻居数量角标 · 右键菜单（查看详情/展开上游全部/收起上游/展开下游全部/收起下游）· 展开收起 0.4s cubic-bezier 缓动居中、拖拽关闭过渡 · hover 高亮一度邻居 · 未知工作流默认隐藏且无切换开关（D6）。
+      迭代建议（I7）：任务详情「查看血缘」入口带任务上下文跳转本页并预置检索。
+    </div>
+  </div>
+</section>
+
+<footer style="text-align:center;padding:24px 0 40px;color:var(--text-muted);font-size:12px">
+  迁移管家（MigOps）界面原型 V1.0 · 2026-10-23 · 设计令牌遵循 CODEBUDDY.md §6.4 · 配套评审：《迁移管家平台-界面交互与排版评审》
+</footer>
+
+</body>
+</html>

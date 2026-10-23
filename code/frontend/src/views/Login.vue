@@ -55,29 +55,12 @@
     </div>
 
     <!-- 临时密码登录后强制修改密码 -->
-    <el-dialog
+    <ChangePasswordDialog
       v-model="pwdDialogVisible"
-      title="修改密码"
-      width="440px"
-      :close-on-click-modal="false"
-      :close-on-press-escape="false"
-      :show-close="false"
-    >
-      <el-alert type="warning" :closable="false" show-icon class="pwd-alert">
-        <template #title>当前为临时密码，请设置新密码后继续使用</template>
-      </el-alert>
-      <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="88px">
-        <el-form-item label="新密码" prop="new_password">
-          <el-input v-model="pwdForm.new_password" type="password" show-password placeholder="至少8位，含三类字符" />
-        </el-form-item>
-        <el-form-item label="确认密码" prop="confirm_password">
-          <el-input v-model="pwdForm.confirm_password" type="password" show-password />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button type="primary" :loading="pwdSubmitting" @click="submitNewPassword">确定</el-button>
-      </template>
-    </el-dialog>
+      :forced="true"
+      :old-password="pwdForm.old_password"
+      @success="onPwdChanged"
+    />
   </div>
 </template>
 
@@ -85,9 +68,10 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { changePassword, getCaptcha } from '@/api/auth'
+import { getCaptcha } from '@/api/auth'
 import { BizError, CODE_CAPTCHA } from '@/api/request'
 import { useUserStore } from '@/store/user'
+import ChangePasswordDialog from '@/components/common/ChangePasswordDialog.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -110,35 +94,11 @@ const rules: FormRules = {
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
 }
 
-// 强制改密对话框
+// 强制改密对话框（复用共用改密组件）
 const pwdDialogVisible = ref(false)
-const pwdFormRef = ref<FormInstance>()
-const pwdSubmitting = ref(false)
 const pwdForm = reactive({
   old_password: '',
-  new_password: '',
-  confirm_password: '',
 })
-
-const pwdRules: FormRules = {
-  new_password: [
-    { required: true, message: '请输入新密码', trigger: 'blur' },
-    { min: 8, message: '密码长度至少 8 位', trigger: 'blur' },
-  ],
-  confirm_password: [
-    { required: true, message: '请再次输入新密码', trigger: 'blur' },
-    {
-      validator: (_rule, value, callback) => {
-        if (value !== pwdForm.new_password) {
-          callback(new Error('两次输入的密码不一致'))
-        } else {
-          callback()
-        }
-      },
-      trigger: 'blur',
-    },
-  ],
-}
 
 async function refreshCaptcha() {
   try {
@@ -174,9 +134,13 @@ async function submit() {
       const redirect = (route.query.redirect as string) || '/'
       router.replace(redirect)
     } catch (err) {
-      // 后端提示需要验证码：展示验证码区并刷新
+      // 后端提示需要验证码：展示验证码区
       if (err instanceof BizError && err.code === CODE_CAPTCHA) {
         captchaRequired.value = true
+      }
+      // 验证码区一旦显示，无论失败原因（密码错 / 验证码错），都刷新一张新图：
+      // 后端验证码为单次有效，旧 code 已被消费，不刷新会让用户用失效 code 反复失败。
+      if (captchaRequired.value) {
         await refreshCaptcha()
       }
     } finally {
@@ -185,24 +149,10 @@ async function submit() {
   })
 }
 
-async function submitNewPassword() {
-  await pwdFormRef.value?.validate(async (valid) => {
-    if (!valid) return
-    pwdSubmitting.value = true
-    try {
-      await changePassword({
-        old_password: pwdForm.old_password,
-        new_password: pwdForm.new_password,
-      })
-      ElMessage.success('密码修改成功')
-      pwdDialogVisible.value = false
-      // 令牌与密码无关，改密后直接带登录态进入目标页
-      const redirect = (route.query.redirect as string) || '/'
-      router.replace(redirect)
-    } finally {
-      pwdSubmitting.value = false
-    }
-  })
+/** 强制改密成功后跳转目标页（令牌与密码无关，保留登录态直接进入）。 */
+function onPwdChanged() {
+  const redirect = (route.query.redirect as string) || '/'
+  router.replace(redirect)
 }
 
 onMounted(() => {

@@ -5,6 +5,7 @@
       <template #header>
         <div class="page-head">
           <span class="page-title">数据迁移管理</span>
+          <span v-if="scenario" class="page-scenario">{{ scenario.name }}</span>
           <div class="head-actions">
             <el-button :disabled="!scenarioId" @click="openImport('items')">导入库表清单</el-button>
             <el-button :disabled="!scenarioId" @click="openImport('records')">导入迁移记录</el-button>
@@ -13,14 +14,6 @@
           </div>
         </div>
       </template>
-
-      <ScenarioBar
-        :scenarios="scenarios"
-        :scenario-id="scenarioId"
-        @change="onScenarioChange"
-        @create="scenarioVisible = true"
-        @delete="removeScenario"
-      />
 
       <template v-if="scenarioId">
         <FilterBar :filters="filters" @update="onFilterUpdate" @search="search" @reset="resetFilters" />
@@ -103,11 +96,8 @@
         />
       </template>
 
-      <el-empty v-else description="请先选择或创建迁移场景" />
+      <el-empty v-else description="请先在空间头部选择或创建迁移场景" />
     </el-card>
-
-    <!-- 场景创建 -->
-    <ScenarioDialog v-model="scenarioVisible" @success="onScenarioCreated" />
 
     <!-- 库表新增/编辑 -->
     <ItemFormDialog
@@ -140,32 +130,30 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useScenarioStore } from '@/store/scenario'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MigrationStatusTag from '@/components/common/MigrationStatusTag.vue'
-import ScenarioBar from './components/ScenarioBar.vue'
 import FilterBar from './components/FilterBar.vue'
-import ScenarioDialog from './components/ScenarioDialog.vue'
 import ItemFormDialog from './components/ItemFormDialog.vue'
 import BatchStatusDialog from './components/BatchStatusDialog.vue'
 import RecordDrawer from './components/RecordDrawer.vue'
 import ImportDialog from './components/ImportDialog.vue'
 import {
-  deleteScenario,
   deleteTableItem,
-  listScenarios,
   listTableItems,
 } from '@/api/data-migration'
 import { downloadFile } from '@/utils/download'
 import { formatDate } from '@/utils/format'
-import type { DataMigrationScenarioOut, TableItemOut } from '@/types'
+import type { TableItemOut } from '@/types'
 
 const route = useRoute()
 const spaceId = computed(() => Number(route.params.spaceId))
 
-const scenarios = ref<DataMigrationScenarioOut[]>([])
-const scenarioId = ref<number | null>(null)
+const scenarioStore = useScenarioStore()
+const scenario = computed(() => scenarioStore.b03)
+const scenarioId = computed(() => scenarioStore.b03?.id ?? null)
 
 const list = ref<TableItemOut[]>([])
 const total = ref(0)
@@ -182,7 +170,6 @@ const filters = ref<Record<string, string>>({
   incr_sync_status: '',
 })
 
-const scenarioVisible = ref(false)
 const itemVisible = ref(false)
 const currentItem = ref<TableItemOut | null>(null)
 const batchVisible = ref(false)
@@ -190,13 +177,6 @@ const recordVisible = ref(false)
 const recordItem = ref<TableItemOut | null>(null)
 const importVisible = ref(false)
 const importKind = ref<'items' | 'records'>('items')
-
-async function loadScenarios() {
-  scenarios.value = await listScenarios(spaceId.value)
-  if (!scenarioId.value && scenarios.value.length) {
-    scenarioId.value = scenarios.value[0].id
-  }
-}
 
 async function load() {
   if (!scenarioId.value) return
@@ -214,18 +194,6 @@ async function load() {
   } finally {
     loading.value = false
   }
-}
-
-function onScenarioChange(id: number) {
-  scenarioId.value = id
-  page.value = 1
-  clearSelection()
-  load()
-}
-
-function onScenarioCreated(scenario: { id: number; name: string }) {
-  scenarioId.value = scenario.id
-  loadScenarios().then(load)
 }
 
 function onFilterUpdate(payload: { key: string; value: string }) {
@@ -274,17 +242,6 @@ async function removeItem(row: TableItemOut) {
   await deleteTableItem(spaceId.value, row.id)
   ElMessage.success('删除成功')
   await load()
-  await loadScenarios()
-}
-
-async function removeScenario() {
-  await ElMessageBox.confirm('删除场景将级联删除其下全部库表与迁移记录，确认删除？', '删除场景', {
-    type: 'warning',
-  })
-  await deleteScenario(spaceId.value, scenarioId.value!)
-  ElMessage.success('场景已删除')
-  scenarioId.value = null
-  await loadScenarios()
 }
 
 function onBatchDone() {
@@ -319,9 +276,19 @@ async function exportItems() {
 }
 
 onMounted(async () => {
-  await loadScenarios()
-  if (scenarioId.value) await load()
+  await scenarioStore.ensureB03(spaceId.value)
+  await load()
 })
+
+/** 空间头场景切换器（b03）切换 → 重置分页与选择并重载列表（交互评审 I2） */
+watch(
+  () => scenarioStore.b03,
+  () => {
+    page.value = 1
+    clearSelection()
+    load()
+  }
+)
 </script>
 
 <style scoped>
@@ -335,6 +302,13 @@ onMounted(async () => {
   font-size: 15px;
   font-weight: 600;
   color: var(--color-text-primary);
+}
+
+.page-scenario {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-primary);
 }
 
 .head-actions {
