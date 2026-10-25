@@ -33,8 +33,9 @@ export interface BuildEdge {
 export interface LineageGraphData {
   up: Map<string, Map<string, LineageRec[]>>
   down: Map<string, Map<string, LineageRec[]>>
-  // 临时表专用邻接表：table -> wsKey -> neighbor -> 记录数组
-  // wsKey = workflow + '\u0001' + script，临时表只在同 workflow+script 下关联上下游
+  // 临时表专用邻接表：table -> pwtKey -> neighbor -> 记录数组
+  // pwtKey = project + '\u0001' + workflow + '\u0001' + task
+  // 临时表仅在同「项目空间 + 工作流 + 任务」上下文内关联上下游（临时表钻取优化需求 R1）
   tempUp: Map<string, Map<string, Map<string, LineageRec[]>>>
   tempDown: Map<string, Map<string, Map<string, LineageRec[]>>>
   typeMap: Map<string, string>
@@ -124,13 +125,15 @@ export function buildGraph(edges: BuildEdge[]): LineageGraphData {
 
     const sIsTemp = typeMap.get(s) === '临时表'
     const tIsTemp = typeMap.get(t) === '临时表'
-    const wsKey = (e.workflow || '') + WS_SEP + (e.script || '')
+    // 临时表钻取优化：以「项目空间 + 工作流 + 任务」三元组作为关联上下文键
+    const pwtKey =
+      (e.project || '') + WS_SEP + (e.workflow || '') + WS_SEP + (e.task || '')
 
     // down: source -> target
-    if (sIsTemp) addTempPair(tempDown, s, wsKey, t, makeRec(e.targetType || '', e))
+    if (sIsTemp) addTempPair(tempDown, s, pwtKey, t, makeRec(e.targetType || '', e))
     else addPair(down, s, t, makeRec(e.targetType || '', e))
     // up: target -> source
-    if (tIsTemp) addTempPair(tempUp, t, wsKey, s, makeRec(e.sourceType || '', e))
+    if (tIsTemp) addTempPair(tempUp, t, pwtKey, s, makeRec(e.sourceType || '', e))
     else addPair(up, t, s, makeRec(e.sourceType || '', e))
   }
 

@@ -23,3 +23,14 @@ code/frontend/.vite/
 
 # Agent 本地状态（技能通过 skills/ 目录纳入版本管理）
 .codebuddy/
+
+# 运行时 / 生成产物（非源码）
+code/bin/.runtime/
+code/backend/data/
+outputs/
+docs/**/*.pdf
+docs/**/*.pptx
+docs/**/*.png
+docs/**/*.html
+docs/gen_ppt.js
+docs/html2pdf.js

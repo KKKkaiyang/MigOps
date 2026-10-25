@@ -1,5 +1,5 @@
 <template>
-  <!-- 保存筛选条件为任务台账 / 编辑台账 / 勾选任务创建固定名单（需求 R3，交互评审 I5 引导式） -->
+  <!-- 保存筛选条件为任务视图 / 编辑视图 / 勾选任务创建固定名单（需求 R3，交互评审 I5 引导式） -->
   <el-dialog
     v-model="visible"
     :title="dialogTitle"
@@ -23,7 +23,7 @@
           </el-tag>
         </div>
       </div>
-      <div class="guide-q">这份台账的名单，后续如何维护？</div>
+      <div class="guide-q">这份视图的名单，后续如何维护？</div>
       <div class="mode-cards">
         <div
           class="mode-card"
@@ -45,15 +45,15 @@
     </template>
 
     <el-form :model="form" label-width="72px" style="margin-top: 14px">
-      <el-form-item label="台账名称">
+      <el-form-item label="视图名称">
         <el-input v-model="form.name" placeholder="如：第一批次" maxlength="128" />
       </el-form-item>
-      <el-form-item label="台账描述">
+      <el-form-item label="视图描述">
         <el-input v-model="form.description" type="textarea" :rows="2" maxlength="512" show-word-limit />
       </el-form-item>
     </el-form>
 
-    <div class="dialog-note">任务台账数据引用原任务（非副本）；台账内的状态变更会直接回写原任务。</div>
+    <div class="dialog-note">任务视图数据引用原任务（非副本）；视图内的状态变更会直接回写原任务。</div>
 
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
@@ -74,9 +74,9 @@ const props = defineProps<{
   modelValue: boolean
   scenarioId: number
   filters?: Record<string, unknown>
-  /** 编辑态：传入已有台账 */
+  /** 编辑态：传入已有视图 */
   view?: SavedViewOut
-  /** R3：勾选任务创建台账（强制固定名单，直接落成员） */
+  /** R3：勾选任务创建视图（强制固定名单，直接落成员） */
   taskIds?: number[]
 }>()
 const emit = defineEmits<{
@@ -95,17 +95,22 @@ const visible = computed({
 const FILTER_LABELS: Record<string, string> = {
   keyword: '任务名称',
   workflow_name: '工作流',
+  project_name: '项目名称',
+  migration_owner: '迁移负责人',
+  active_status: '任务活跃状态',
   migration_status: '迁移状态',
-  schedule_status: '调度状态',
-  check_status: '校验状态',
-  owner: 'Owner',
+  dualrun_status: '双跑调度状态',
+  check_status: '数据校验状态',
+  acceptance_status: '客户验收状态',
+  tag_ids: '标签',
+  tag_match: '标签匹配',
 }
 
 const isEdit = computed(() => !!props.view)
 const dialogTitle = computed(() => {
-  if (isEdit.value) return '编辑台账'
-  if (props.taskIds?.length) return '创建台账（固定名单）'
-  return '保存为台账'
+  if (isEdit.value) return '编辑视图'
+  if (props.taskIds?.length) return '创建视图（固定名单）'
+  return '保存为视图'
 })
 
 const submitting = ref(false)
@@ -141,7 +146,7 @@ async function submit() {
         description: form.description || undefined,
         view_mode: form.view_mode,
       })
-      ElMessage.success('台账已更新')
+      ElMessage.success('视图已更新')
     } else if (props.taskIds?.length) {
       await createSavedView(spaceId.value, props.scenarioId, {
         name: form.name,
@@ -149,7 +154,7 @@ async function submit() {
         member_ids: props.taskIds,
         view_mode: 'fixed',
       })
-      ElMessage.success('台账已创建（固定名单）')
+      ElMessage.success('视图已创建（固定名单）')
     } else {
       await createSavedView(spaceId.value, props.scenarioId, {
         name: form.name,
@@ -157,7 +162,7 @@ async function submit() {
         filter_config: props.filters || {},
         view_mode: form.view_mode,
       })
-      ElMessage.success('台账已创建')
+      ElMessage.success('视图已创建')
     }
     visible.value = false
     emit('success')

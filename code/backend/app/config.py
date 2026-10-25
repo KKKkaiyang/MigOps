@@ -54,5 +54,19 @@ class Settings:
 
     PORT = int(os.getenv("PORT", "8999"))
 
+    # ── skill 管理（b08，平台级全局） ──
+    # skill zip 本地存储根目录（后续可切换对象存储，见 StorageBackend 抽象）
+    _default_skill_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "skills"
+    )
+    SKILL_STORAGE_DIR = os.getenv("SKILL_STORAGE_DIR", _default_skill_dir)
+    # 单文件上传上限（字节），默认 50MB
+    SKILL_MAX_UPLOAD_BYTES = int(os.getenv("SKILL_MAX_UPLOAD_BYTES", str(50 * 1024 * 1024)))
+    # REST API ak/sk 签名：时间戳允许偏差（秒）与 nonce 防重放窗口（秒）
+    API_SIGN_TIME_SKEW_SECONDS = int(os.getenv("API_SIGN_TIME_SKEW_SECONDS", "300"))
+    API_SIGN_NONCE_TTL_SECONDS = int(os.getenv("API_SIGN_NONCE_TTL_SECONDS", "300"))
+    # Fernet 密钥（用于加密存储 secret_key）；缺省由 JWT_SECRET 派生 32 字节 URL-safe 密钥
+    API_KEY_FERNET_KEY = os.getenv("API_KEY_FERNET_KEY", "")
+
 
 settings = Settings()

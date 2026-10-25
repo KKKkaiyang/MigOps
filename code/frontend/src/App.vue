@@ -8,6 +8,7 @@
       <nav class="nav">
         <router-link to="/">概览</router-link>
         <router-link to="/b01/spaces">项目空间</router-link>
+        <router-link to="/b08/skills">skill 市场</router-link>
         <router-link v-if="isL0" to="/common/users">用户管理</router-link>
       </nav>
       <div class="header-right">
@@ -23,6 +24,7 @@
                 <span class="menu-meta">{{ user.username }}</span>
               </el-dropdown-item>
               <el-dropdown-item command="change-password">修改密码</el-dropdown-item>
+              <el-dropdown-item command="profile">个人中心 / API 密钥</el-dropdown-item>
               <el-dropdown-item divided command="logout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
@@ -61,6 +63,10 @@ const pwdVisible = ref(false)
 async function onCommand(command: string) {
   if (command === 'change-password') {
     pwdVisible.value = true
+    return
+  }
+  if (command === 'profile') {
+    router.push('/profile')
     return
   }
   if (command === 'logout') {

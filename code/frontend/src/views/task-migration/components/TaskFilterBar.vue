@@ -1,5 +1,5 @@
 <template>
-  <!-- 任务台账筛选行（标签筛选待二期标签管理上线后扩展，确认决策 D6） -->
+  <!-- 任务视图筛选行：5 维状态 + 项目/负责人/工作流 + 标签（D1/D2） -->
   <div class="filter-row">
     <el-input
       :model-value="filters.keyword"
@@ -19,45 +19,36 @@
       @keyup.enter="emit('search')"
       @clear="emit('search')"
     />
-    <el-select
-      :model-value="filters.migration_status"
-      placeholder="迁移状态"
+    <el-input
+      :model-value="filters.project_name"
+      placeholder="项目名称"
       clearable
       style="width: 140px"
-      @update:model-value="(v: string) => emit('update', { key: 'migration_status', value: v })"
-      @change="emit('search')"
-    >
-      <el-option v-for="t in TASK_MIGRATION_STATUS_OPTIONS" :key="t" :label="t" :value="t" />
-    </el-select>
-    <el-select
-      :model-value="filters.schedule_status"
-      placeholder="调度状态"
-      clearable
-      style="width: 120px"
-      @update:model-value="(v: string) => emit('update', { key: 'schedule_status', value: v })"
-      @change="emit('search')"
-    >
-      <el-option v-for="t in SCHEDULE_STATUS_OPTIONS" :key="t" :label="t" :value="t" />
-    </el-select>
-    <el-select
-      :model-value="filters.check_status"
-      placeholder="校验状态"
-      clearable
-      style="width: 120px"
-      @update:model-value="(v: string) => emit('update', { key: 'check_status', value: v })"
-      @change="emit('search')"
-    >
-      <el-option v-for="t in CHECK_STATUS_OPTIONS" :key="t" :label="t" :value="t" />
-    </el-select>
-    <el-input
-      :model-value="filters.owner"
-      placeholder="Owner"
-      clearable
-      style="width: 110px"
-      @update:model-value="(v: string) => emit('update', { key: 'owner', value: v })"
+      @update:model-value="(v: string) => emit('update', { key: 'project_name', value: v })"
       @keyup.enter="emit('search')"
       @clear="emit('search')"
     />
+    <el-input
+      :model-value="filters.migration_owner"
+      placeholder="迁移负责人"
+      clearable
+      style="width: 120px"
+      @update:model-value="(v: string) => emit('update', { key: 'migration_owner', value: v })"
+      @keyup.enter="emit('search')"
+      @clear="emit('search')"
+    />
+    <el-select
+      v-for="dim in STATUS_DIMENSIONS"
+      :key="dim.key"
+      :model-value="(filters as Record<string, any>)[dim.key]"
+      :placeholder="dim.label"
+      clearable
+      style="width: 140px"
+      @update:model-value="(v: string) => emit('update', { key: dim.key, value: v })"
+      @change="emit('search')"
+    >
+      <el-option v-for="t in dim.options" :key="t" :label="t" :value="t" />
+    </el-select>
     <el-select
       :model-value="filters.tag_match"
       placeholder="标签匹配"
@@ -86,7 +77,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { CHECK_STATUS_OPTIONS, SCHEDULE_STATUS_OPTIONS, TASK_MIGRATION_STATUS_OPTIONS } from '@/types'
+import { STATUS_DIMENSIONS } from '@/utils/task-status'
+import type { TagOut } from '@/types'
 
 interface TagOption {
   id: number
@@ -104,7 +96,7 @@ const emit = defineEmits<{
   (e: 'reset'): void
 }>()
 
-const tags = computed(() => props.tags ?? [])
+const tags = computed<TagOut[]>(() => (props.tags as TagOut[]) ?? [])
 </script>
 
 <style scoped>

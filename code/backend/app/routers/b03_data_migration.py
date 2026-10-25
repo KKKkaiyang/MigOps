@@ -2,6 +2,10 @@
 
 空间业务表位于空间库（mig_<space_code>_db），经 get_space_db 路由；
 权限校验经 get_db（common_user_role 位于公共库）。
+
+鉴权：统一 `get_actor` 依赖，支持网页登录态（Bearer）与 REST API（ak/sk HMAC 签名）
+双鉴权（需求 AK-02 / BRD §4.5）；空间隔离业务经 `require_space_member` 校验成员/角色，
+ak/sk 操作人 = 密钥持有用户，须为目标空间成员（D2）。
 """
 
 from typing import Optional
@@ -10,7 +14,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, get_space_db, require_space_member
+from app.core.deps import get_actor, get_space_db, require_space_member
 from app.core.response import PageData, ok
 from app.database import get_db
 from app.models.user import CommonUser
@@ -47,7 +51,7 @@ def list_scenarios(
     space_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return ok(data=svc.list_scenarios(sdb, space_id))
@@ -59,7 +63,7 @@ def create_scenario(
     payload: ScenarioCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_scenario(sdb, space_id, payload, operator=str(user.id))
@@ -73,7 +77,7 @@ def update_scenario(
     payload: ScenarioUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.update_scenario(sdb, space_id, scenario_id, payload, operator=str(user.id))
@@ -86,7 +90,7 @@ def delete_scenario(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.delete_scenario(sdb, space_id, scenario_id)
@@ -100,7 +104,7 @@ def list_table_items(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     keyword: str = Query(None),
@@ -145,7 +149,7 @@ def create_table_item(
     payload: TableItemCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_table_item(sdb, space_id, scenario_id, payload, operator=str(user.id))
@@ -159,7 +163,7 @@ def update_table_item(
     payload: TableItemUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.update_table_item(sdb, space_id, item_id, payload, operator=str(user.id))
@@ -173,7 +177,7 @@ def delete_table_item(
     item_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.delete_table_item(sdb, space_id, item_id)
@@ -187,7 +191,7 @@ def batch_update_status(
     payload: BatchStatusIn,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.get_scenario(sdb, space_id, scenario_id)
@@ -201,7 +205,7 @@ def import_table_items(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     file: UploadFile = File(...),
 ):
     require_space_member(db, user, space_id)
@@ -215,7 +219,7 @@ def table_item_template(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return _xlsx_response(svc.table_item_template(), "库表清单导入模板.xlsx")
@@ -227,7 +231,7 @@ def export_table_items(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     keyword: str = Query(None),
     table_type: str = Query(None),
     metadata_status: str = Query(None),
@@ -255,7 +259,7 @@ def list_records(
     item_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
 ):
@@ -272,7 +276,7 @@ def create_record(
     payload: RecordCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_record(sdb, space_id, item_id, payload, operator=str(user.id))
@@ -286,7 +290,7 @@ def update_record(
     payload: RecordUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.update_record(sdb, space_id, record_id, payload, operator=str(user.id))
@@ -299,7 +303,7 @@ def delete_record(
     record_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.delete_record(sdb, space_id, record_id)
@@ -312,7 +316,7 @@ def import_records(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     file: UploadFile = File(...),
 ):
     require_space_member(db, user, space_id)
@@ -326,7 +330,7 @@ def record_template(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return _xlsx_response(svc.record_template(), "迁移记录导入模板.xlsx")

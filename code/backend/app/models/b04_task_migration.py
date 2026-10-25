@@ -1,6 +1,9 @@
-"""b04 任务迁移管理：迁移场景、任务台账、排查备注、自定义台账（空间库表）。
+"""b04 任务迁移管理：迁移场景、任务台账（基础表+扩展表）、迁移模板、排查备注、自定义台账（空间库表）。
 
-表结构依据《项目空间业务功能需求》§6.5；状态机依据 BRD 4.2。
+表结构依据《任务迁移-任务台账数据模型重构需求》V1.0（决策 D1~D7）：
+- `b04_task`（基础表）：15 业务字段 + 5 维独立状态，替代旧单表 + 10 态状态机。
+- `b04_task_ext`（扩展表）：与基础表一对一，按空间模板动态加列 `f_1…n`（ORM 仅定义 task_id）。
+- `b04_migration_template`（空间级模板）：每空间一份，`config_json` 驱动字段选择/必填/排序/列表展示/导入。
 """
 
 from datetime import datetime
@@ -9,6 +12,7 @@ from sqlalchemy import (
     BigInteger,
     Column,
     DateTime,
+    ForeignKey,
     Index,
     String,
     Text,
@@ -18,105 +22,71 @@ from sqlalchemy.dialects.mysql import JSON
 
 from app.models.space_base import SpaceBase
 
-# ── 迁移状态（BRD 4.2） ──
-TASK_STATUS_NOT_STARTED = "未开始"
-TASK_STATUS_DEV_DONE = "改造完成"
-TASK_STATUS_SCHED_SUCCESS = "调度成功"
-TASK_STATUS_CHECK_PASSED = "数据校验通过"
-TASK_STATUS_CHECK_FAILED = "数据校验不通过"
-TASK_STATUS_ACCEPT_PASSED = "客户验收通过"
-TASK_STATUS_ACCEPT_FAILED = "客户验收不通过"
-TASK_STATUS_SUSPENDED = "挂起"
-TASK_STATUS_DISCARDED = "废弃"
-TASK_STATUSES = (
-    TASK_STATUS_NOT_STARTED,
-    TASK_STATUS_DEV_DONE,
-    TASK_STATUS_SCHED_SUCCESS,
-    TASK_STATUS_CHECK_PASSED,
-    TASK_STATUS_CHECK_FAILED,
-    TASK_STATUS_ACCEPT_PASSED,
-    TASK_STATUS_ACCEPT_FAILED,
-    TASK_STATUS_SUSPENDED,
-    TASK_STATUS_DISCARDED,
-)
-# 允许的状态流转：正向链 + 校验/验收不通过回退 + 任意正向态可挂起/废弃 + 挂起可恢复
-TASK_STATUS_TRANSITIONS = {
-    TASK_STATUS_NOT_STARTED: {
-        TASK_STATUS_DEV_DONE,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_DEV_DONE: {
-        TASK_STATUS_SCHED_SUCCESS,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_SCHED_SUCCESS: {
-        TASK_STATUS_CHECK_PASSED,
-        TASK_STATUS_CHECK_FAILED,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_CHECK_PASSED: {
-        TASK_STATUS_ACCEPT_PASSED,
-        TASK_STATUS_ACCEPT_FAILED,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_CHECK_FAILED: {
-        TASK_STATUS_CHECK_PASSED,
-        TASK_STATUS_SCHED_SUCCESS,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_ACCEPT_PASSED: {
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_ACCEPT_FAILED: {
-        TASK_STATUS_CHECK_PASSED,
-        TASK_STATUS_CHECK_FAILED,
-        TASK_STATUS_SCHED_SUCCESS,
-        TASK_STATUS_SUSPENDED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_SUSPENDED: {
-        TASK_STATUS_NOT_STARTED,
-        TASK_STATUS_DEV_DONE,
-        TASK_STATUS_SCHED_SUCCESS,
-        TASK_STATUS_CHECK_PASSED,
-        TASK_STATUS_CHECK_FAILED,
-        TASK_STATUS_ACCEPT_FAILED,
-        TASK_STATUS_DISCARDED,
-    },
-    TASK_STATUS_DISCARDED: set(),
-}
-
-# ── 调度状态 ──
-SCHEDULE_STATUS_NOT_SUBMITTED = "未提交"
-SCHEDULE_STATUS_SUBMITTED = "已提交"
-SCHEDULE_STATUS_RUNNING = "调度中"
-SCHEDULE_STATUS_SUCCESS = "调度成功"
-SCHEDULE_STATUS_FAILED = "调度失败"
-SCHEDULE_STATUSES = (
-    SCHEDULE_STATUS_NOT_SUBMITTED,
-    SCHEDULE_STATUS_SUBMITTED,
-    SCHEDULE_STATUS_RUNNING,
-    SCHEDULE_STATUS_SUCCESS,
-    SCHEDULE_STATUS_FAILED,
+# ── 5 维独立状态（整体替换旧 migration_status 10 态 / schedule_status / check_status，D1） ──
+# 任务活跃状态
+ACTIVE_STATUS_DRAFT = "草稿"
+ACTIVE_STATUS_SCHEDULING = "正常调度"
+ACTIVE_STATUS_OFFLINE = "下线"
+ACTIVE_STATUS_FROZEN = "冻结"
+ACTIVE_STATUSES = (
+    ACTIVE_STATUS_DRAFT,
+    ACTIVE_STATUS_SCHEDULING,
+    ACTIVE_STATUS_OFFLINE,
+    ACTIVE_STATUS_FROZEN,
 )
 
-# ── 数据校验状态 ──
-CHECK_STATUS_NONE = "未校验"
-CHECK_STATUS_RUNNING = "校验中"
+# 迁移状态
+MIGRATION_STATUS_NOT_STARTED = "未开始"
+MIGRATION_STATUS_MIGRATING = "迁移中"
+MIGRATION_STATUS_DONE = "已完成"
+MIGRATION_STATUSES = (
+    MIGRATION_STATUS_NOT_STARTED,
+    MIGRATION_STATUS_MIGRATING,
+    MIGRATION_STATUS_DONE,
+)
+
+# 双跑调度状态（替代旧 schedule_status）
+DUALRUN_STATUS_NOT_SCHEDULED = "未调度"
+DUALRUN_STATUS_SCHEDULING = "调度中"
+DUALRUN_STATUS_DRYRUN = "空跑调度"
+DUALRUN_STATUS_SUBMIT_ERROR = "提交报错"
+DUALRUN_STATUSES = (
+    DUALRUN_STATUS_NOT_SCHEDULED,
+    DUALRUN_STATUS_SCHEDULING,
+    DUALRUN_STATUS_DRYRUN,
+    DUALRUN_STATUS_SUBMIT_ERROR,
+)
+
+# 数据校验状态（可空，空视作"未校验"）
 CHECK_STATUS_PASSED = "校验通过"
 CHECK_STATUS_FAILED = "校验不通过"
+CHECK_STATUS_MINOR_GAP = "微小差距"
 CHECK_STATUSES = (
-    CHECK_STATUS_NONE,
-    CHECK_STATUS_RUNNING,
     CHECK_STATUS_PASSED,
     CHECK_STATUS_FAILED,
+    CHECK_STATUS_MINOR_GAP,
 )
+
+# 客户验收状态（可空，空视作"未验收"）
+ACCEPTANCE_STATUS_PASSED = "通过"
+ACCEPTANCE_STATUS_FAILED = "不通过"
+ACCEPTANCE_STATUSES = (
+    ACCEPTANCE_STATUS_PASSED,
+    ACCEPTANCE_STATUS_FAILED,
+)
+
+# 数据校验结果（b05 校验结果导入后刷新到任务，见《数据校验-数据校验结果导入与刷新需求》）
+CHECK_RESULT_PASSED = "通过"
+CHECK_RESULT_FAILED = "不通过"
+CHECK_RESULT_NONE = "无校验结果"
+CHECK_RESULTS = (
+    CHECK_RESULT_PASSED,
+    CHECK_RESULT_FAILED,
+    CHECK_RESULT_NONE,
+)
+
+# 归属环境默认取值
+ENV_PROD = "生产"
 
 # ── 排查备注类型 ──
 NOTE_KIND_TROUBLESHOOT = "troubleshoot"
@@ -143,7 +113,7 @@ class B04Scenario(SpaceBase):
 
 
 class B04Task(SpaceBase):
-    """任务台账。"""
+    """任务台账（基础表）：所有项目共有的固定核心字段 + 5 维独立状态。"""
 
     __tablename__ = "b04_task"
     __table_args__ = (
@@ -154,23 +124,83 @@ class B04Task(SpaceBase):
     id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
     space_id = Column(BigInteger, nullable=False, comment="所属空间")
     scenario_id = Column(BigInteger, nullable=False, comment="迁移场景ID")
-    workflow_name = Column(String(128), nullable=False, comment="工作流名称")
+    # ── 15 业务字段（D2 统一 project_name；见需求 §3.1） ──
+    project_name = Column(
+        String(128), nullable=False, default="default", comment="项目名称(统一自旧dw_project_space)"
+    )
+    workflow_name = Column(String(128), comment="工作流名称(与task_name不能全空)")
     task_name = Column(String(255), nullable=False, comment="任务名称")
-    script_name = Column(String(255), comment="脚本名称")
-    owner = Column(String(64), comment="任务Owner")
-    task_uri = Column(
-        String(512), nullable=False, comment="任务URI:项目名称://任务名称@工作流名称"
+    # B04-08 导入放宽：仅项目名称/任务名称必填，其余字段可留空落 NULL。
+    # 注意：这些列不设默认值——SQLAlchemy 对显式 None 会触发 Python 侧默认值、
+    # 对 server_default 会省略列让库默认值触发，两者都会导致无法落 NULL；
+    # 任务创建仅经导入路径（显式传值/传空），无需默认值。
+    env = Column(
+        String(32), nullable=True, comment="归属环境:开发/测试/准生产/生产(可空,无默认值)"
+    )
+    business = Column(String(255), comment="归属业务")
+    task_type = Column(String(64), comment="任务类型(码值:DI/HiveSQL/SparkSQL...)")
+    migration_owner = Column(String(64), nullable=True, comment="迁移Owner(迁移负责人)(可空)")
+    active_status = Column(
+        String(32), nullable=True, comment="任务活跃状态:草稿/正常调度/下线/冻结(可空,无默认值)"
     )
     migration_status = Column(
-        String(32), default=TASK_STATUS_NOT_STARTED, comment="迁移状态"
+        String(32), nullable=True, comment="迁移状态:未开始/迁移中/已完成(可空,无默认值)"
     )
-    schedule_status = Column(
-        String(32), default=SCHEDULE_STATUS_NOT_SUBMITTED, comment="调度状态"
+    dualrun_status = Column(
+        String(32), nullable=True, comment="双跑调度状态:未调度/调度中/空跑调度/提交报错(可空,无默认值)"
     )
-    check_status = Column(String(32), default=CHECK_STATUS_NONE, comment="数据校验状态")
-    input_tables = Column(String(1024), comment="输入表(逗号分隔)")
-    output_tables = Column(String(1024), comment="输出表(逗号分隔)")
-    latest_note = Column(Text, comment="最新排查备注摘要(冗余)")
+    check_status = Column(String(32), comment="数据校验状态:校验通过/校验不通过/微小差距(空=未校验)")
+    acceptance_status = Column(String(32), comment="客户验收状态:通过/不通过(空=未验收)")
+    check_result = Column(
+        String(32),
+        nullable=True,
+        comment="数据校验结果:通过/不通过/无校验结果(b05校验结果导入后按血缘输出表刷新;可空,无默认值)",
+    )
+    remark = Column(String(1024), comment="备注信息")
+    task_uri = Column(
+        String(512), nullable=False, comment="任务URI:project_name://task_name@workflow_name"
+    )
+    created_by = Column(String(64), comment="创建人")
+    created_at = Column(DateTime, default=datetime.now, comment="创建时间")
+    updated_by = Column(String(64), comment="更新人")
+    updated_at = Column(
+        DateTime, default=datetime.now, onupdate=datetime.now, comment="更新时间"
+    )
+    deleted_at = Column(DateTime, comment="逻辑删除时间")
+
+
+class B04TaskExt(SpaceBase):
+    """任务台账扩展表：与基础表一对一（task_id）。
+
+    注意：`f_1…f_n` 扩展列**不**写为 ORM 列，由空间模板动态 ALTER 加列、
+    并以动态 SQL 读写（列名白名单 `^f_[0-9]+$`，见需求 §9.4）。
+    """
+
+    __tablename__ = "b04_task_ext"
+    __table_args__ = (
+        Index("idx_ext_task", "task_id"),
+    )
+
+    task_id = Column(
+        BigInteger,
+        ForeignKey("b04_task.id", ondelete="CASCADE"),
+        primary_key=True,
+        comment="任务ID(一对一,外键级联)",
+    )
+
+
+class B04MigrationTemplate(SpaceBase):
+    """空间级迁移模板：每空间一份，config_json 驱动字段选择/必填/排序/列表展示/导入。"""
+
+    __tablename__ = "b04_migration_template"
+    __table_args__ = (
+        UniqueConstraint("space_id", name="uk_space_template"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True, comment="主键")
+    space_id = Column(BigInteger, nullable=False, comment="所属空间(每空间一份)")
+    name = Column(String(128), nullable=False, comment="模板名称")
+    config_json = Column(JSON, nullable=False, comment="字段配置(有序):字段选择/必填/排序/列表展示/扩展字段定义")
     created_by = Column(String(64), comment="创建人")
     created_at = Column(DateTime, default=datetime.now, comment="创建时间")
     updated_by = Column(String(64), comment="更新人")

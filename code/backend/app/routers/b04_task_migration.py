@@ -1,20 +1,27 @@
-"""b04 任务迁移管理接口。
+"""b04 任务迁移管理接口（含 b06 标签、自定义台账）。
 
 空间业务表位于空间库（mig_<space_code>_db），经 get_space_db 路由；
 权限校验经 get_db（common_user_role 位于公共库）。
+
+鉴权：统一 `get_actor` 依赖，支持网页登录态（Bearer）与 REST API（ak/sk HMAC 签名）
+双鉴权（需求 AK-02 / BRD §4.5）；空间隔离业务经 `require_space_member` 校验成员/角色，
+ak/sk 操作人 = 密钥持有用户，须为目标空间成员（D2）。
 """
 
+import json
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, get_space_db, require_space_member
+from app.core.deps import get_actor, get_space_db, require_space_member
 from app.core.response import PageData, ok
 from app.database import get_db
 from app.models.user import CommonUser
 from app.schemas.b04_task_migration import (
+    MigrationTemplateOut,
+    MigrationTemplateUpsert,
     NoteCreate,
     NoteOut,
     SavedViewAddMembers,
@@ -59,9 +66,23 @@ def _parse_int_list(raw: Optional[str]) -> Optional[list]:
     return out or None
 
 
-def _task_out_with_tags(task, tag_map: dict) -> TaskOut:
+def _parse_ext_filters(raw: Optional[str]) -> Optional[dict]:
+    """解析扩展字段筛选 JSON：{f_1: value, ...}。"""
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except (ValueError, TypeError):
+        return None
+    return None
+
+
+def _task_out_with_tags(task, tag_map: dict, ext_map: dict) -> TaskOut:
     out = TaskOut.model_validate(task)
     out.tags = [TagBrief(**t) for t in tag_map.get(task.id, [])]
+    out.ext = ext_map.get(task.id, {})
     return out
 
 
@@ -71,7 +92,7 @@ def list_scenarios(
     space_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return ok(data=svc.list_scenarios(sdb, space_id))
@@ -83,7 +104,7 @@ def create_scenario(
     payload: ScenarioCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_scenario(sdb, space_id, payload, operator=str(user.id))
@@ -97,7 +118,7 @@ def update_scenario(
     payload: ScenarioUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.update_scenario(sdb, space_id, scenario_id, payload, operator=str(user.id))
@@ -110,11 +131,48 @@ def delete_scenario(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.delete_scenario(sdb, space_id, scenario_id)
     return ok(message="删除成功")
+
+
+# ── 空间级迁移模板 ──
+@router.get("/spaces/{space_id}/template")
+def get_space_template(
+    space_id: int,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_actor),
+):
+    require_space_member(db, user, space_id)
+    obj = svc.get_template(sdb, space_id)
+    return ok(data=MigrationTemplateOut.model_validate(obj) if obj else None)
+
+
+@router.post("/spaces/{space_id}/template", status_code=201)
+def upsert_space_template(
+    space_id: int,
+    payload: MigrationTemplateUpsert,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_actor),
+):
+    require_space_member(db, user, space_id)
+    obj = svc.upsert_template(sdb, space_id, payload, operator=str(user.id))
+    return ok(data=MigrationTemplateOut.model_validate(obj), message="模板已保存")
+
+
+@router.get("/spaces/{space_id}/template/import-excel")
+def download_template(
+    space_id: int,
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_actor),
+):
+    require_space_member(db, user, space_id)
+    return _xlsx_response(svc.task_template_xlsx(sdb, space_id), "任务导入模板.xlsx")
 
 
 # ── 任务台账 ──
@@ -124,20 +182,25 @@ def list_tasks(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     keyword: str = Query(None),
     workflow_name: str = Query(None),
+    project_name: str = Query(None),
+    migration_owner: str = Query(None),
+    active_status: str = Query(None),
     migration_status: str = Query(None),
-    schedule_status: str = Query(None),
+    dualrun_status: str = Query(None),
     check_status: str = Query(None),
-    owner: str = Query(None),
+    acceptance_status: str = Query(None),
     tag_ids: str = Query(None, description="逗号分隔的标签ID，按 tag_match 规则筛选"),
     tag_match: str = Query("all", description="all=任务需含全部所选标签;any=含任一标签"),
+    ext: str = Query(None, description="扩展字段筛选 JSON: {f_1: value}"),
 ):
     require_space_member(db, user, space_id)
     tag_id_list = _parse_int_list(tag_ids)
+    ext_filters = _parse_ext_filters(ext)
     rows, total = svc.list_tasks(
         sdb,
         space_id,
@@ -146,21 +209,48 @@ def list_tasks(
         page_size,
         keyword,
         workflow_name,
+        project_name,
+        migration_owner,
+        active_status,
         migration_status,
-        schedule_status,
+        dualrun_status,
         check_status,
-        owner,
+        acceptance_status,
         tag_id_list,
         tag_match,
+        ext_filters,
     )
+    ext_map = svc.get_ext_map(sdb, [r.id for r in rows])
     tag_map = tag_svc.get_task_tags_map(sdb, space_id, [r.id for r in rows])
     data = PageData[TaskOut](
-        list=[_task_out_with_tags(r, tag_map) for r in rows],
+        list=[_task_out_with_tags(r, tag_map, ext_map) for r in rows],
         total=total,
         page=page,
         page_size=page_size,
     )
     return ok(data=data)
+
+
+@router.get("/tasks/by-key")
+def get_task_by_key(
+    space_id: int,
+    project_name: str = Query(..., description="项目名称"),
+    task_name: str = Query(..., description="任务名称"),
+    db: Session = Depends(get_db),
+    sdb: Session = Depends(get_space_db),
+    user: CommonUser = Depends(get_actor),
+):
+    """按（项目名称 + 任务名称）查任务详情（D5：血缘「查看详情」内任务名直达）。"""
+    require_space_member(db, user, space_id)
+    obj = svc.get_task_by_key(sdb, space_id, project_name, task_name)
+    if not obj:
+        from app.core.exceptions import NotFoundError
+
+        raise NotFoundError(f"未找到任务：{project_name}/{task_name}")
+    ext_map = svc.get_ext_map(sdb, [obj.id])
+    out = TaskOut.model_validate(obj)
+    out.ext = ext_map.get(obj.id, {})
+    return ok(data=out)
 
 
 @router.get("/tasks/{task_id}")
@@ -169,11 +259,14 @@ def get_task(
     task_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.get_task(sdb, space_id, task_id)
-    return ok(data=TaskOut.model_validate(obj))
+    ext_map = svc.get_ext_map(sdb, [task_id])
+    out = TaskOut.model_validate(obj)
+    out.ext = ext_map.get(task_id, {})
+    return ok(data=out)
 
 
 @router.put("/tasks/{task_id}")
@@ -183,7 +276,7 @@ def update_task(
     payload: TaskUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.update_task(sdb, space_id, task_id, payload, operator=str(user.id))
@@ -197,10 +290,10 @@ def update_task_status(
     payload: TaskStatusIn,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
-    svc.update_task_status(sdb, space_id, task_id, payload.status, operator=str(user.id))
+    svc.update_task_status(sdb, space_id, task_id, payload, operator=str(user.id))
     return ok(message="状态已更新")
 
 
@@ -211,12 +304,12 @@ def batch_update_task_status(
     payload: TaskBatchStatusIn,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.get_scenario(sdb, space_id, scenario_id)
     affected = svc.batch_update_task_status(
-        sdb, space_id, payload.ids, payload.status, operator=str(user.id)
+        sdb, space_id, payload.ids, payload.dimension, payload.value, operator=str(user.id)
     )
     return ok(data={"affected": affected}, message=f"已更新 {affected} 条")
 
@@ -227,14 +320,13 @@ def import_tasks(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     file: UploadFile = File(...),
     mode: str = Query("overwrite", description="overwrite=覆盖导入; incremental=增量导入"),
 ):
     require_space_member(db, user, space_id)
-    space = get_space(db, space_id)
     result = svc.import_tasks(
-        sdb, space_id, scenario_id, space.space_name, file, operator=str(user.id), mode=mode
+        sdb, space_id, scenario_id, file, operator=str(user.id), mode=mode
     )
     return ok(data=result, message="导入完成")
 
@@ -245,10 +337,10 @@ def task_template(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
-    return _xlsx_response(svc.task_template(), "任务台账导入模板.xlsx")
+    return _xlsx_response(svc.task_template_xlsx(sdb, space_id), "任务导入模板.xlsx")
 
 
 @router.get("/scenarios/{scenario_id}/tasks/export")
@@ -257,13 +349,16 @@ def export_tasks(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     keyword: str = Query(None),
     workflow_name: str = Query(None),
+    project_name: str = Query(None),
+    migration_owner: str = Query(None),
+    active_status: str = Query(None),
     migration_status: str = Query(None),
-    schedule_status: str = Query(None),
+    dualrun_status: str = Query(None),
     check_status: str = Query(None),
-    owner: str = Query(None),
+    acceptance_status: str = Query(None),
     tag_ids: str = Query(None, description="逗号分隔的标签ID，按 tag_match 规则筛选"),
     tag_match: str = Query("all", description="all=任务需含全部所选标签;any=含任一标签"),
 ):
@@ -275,16 +370,19 @@ def export_tasks(
         scenario_id,
         keyword,
         workflow_name,
+        project_name,
+        migration_owner,
+        active_status,
         migration_status,
-        schedule_status,
+        dualrun_status,
         check_status,
-        owner,
+        acceptance_status,
         tag_id_list,
         tag_match,
     )
     return _xlsx_response(content, "任务台账.xlsx")
 
-# ── 任务标签（标签主表与 CRUD 见 b06 标签管理模块；此处仅任务侧打标签） ──
+
 # ── 任务标签 ──
 @router.get("/tasks/{task_id}/tags")
 def get_task_tags(
@@ -292,7 +390,7 @@ def get_task_tags(
     task_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return ok(data=tag_svc.get_task_tags(sdb, space_id, task_id))
@@ -305,7 +403,7 @@ def set_task_tags(
     payload: TaskTagIn,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     tags = tag_svc.set_task_tags(sdb, space_id, task_id, payload, operator=str(user.id))
@@ -319,7 +417,7 @@ def batch_task_tags(
     payload: TaskBatchTagIn,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.get_scenario(sdb, space_id, scenario_id)
@@ -342,7 +440,7 @@ def list_notes(
     task_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     rows = svc.list_notes(sdb, space_id, task_id)
@@ -356,7 +454,7 @@ def create_note(
     payload: NoteCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_note(sdb, space_id, task_id, payload, operator=str(user.id))
@@ -370,7 +468,7 @@ def list_saved_views(
     scenario_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return ok(data=svc.list_saved_views(sdb, space_id, scenario_id))
@@ -383,7 +481,7 @@ def create_saved_view(
     payload: SavedViewCreate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     obj = svc.create_saved_view(sdb, space_id, scenario_id, payload, operator=str(user.id))
@@ -397,7 +495,7 @@ def update_saved_view(
     payload: SavedViewUpdate,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.update_saved_view(sdb, space_id, view_id, payload, operator=str(user.id))
@@ -410,7 +508,7 @@ def delete_saved_view(
     view_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     svc.delete_saved_view(sdb, space_id, view_id)
@@ -423,7 +521,7 @@ def get_saved_view(
     view_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     return ok(data=svc.get_saved_view_out(sdb, space_id, view_id))
@@ -435,15 +533,18 @@ def list_saved_view_tasks(
     view_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     keyword: Optional[str] = Query(None),
     workflow_name: Optional[str] = Query(None),
+    project_name: Optional[str] = Query(None),
+    migration_owner: Optional[str] = Query(None),
+    active_status: Optional[str] = Query(None),
     migration_status: Optional[str] = Query(None),
-    schedule_status: Optional[str] = Query(None),
+    dualrun_status: Optional[str] = Query(None),
     check_status: Optional[str] = Query(None),
-    owner: Optional[str] = Query(None),
+    acceptance_status: Optional[str] = Query(None),
     tag_ids: Optional[str] = Query(None),
     tag_match: str = Query("all"),
 ):
@@ -453,19 +554,23 @@ def list_saved_view_tasks(
         for k, v in {
             "keyword": keyword,
             "workflow_name": workflow_name,
+            "project_name": project_name,
+            "migration_owner": migration_owner,
+            "active_status": active_status,
             "migration_status": migration_status,
-            "schedule_status": schedule_status,
+            "dualrun_status": dualrun_status,
             "check_status": check_status,
-            "owner": owner,
+            "acceptance_status": acceptance_status,
             "tag_ids": _parse_int_list(tag_ids),
             "tag_match": tag_match,
         }.items()
         if v is not None and not (isinstance(v, list) and len(v) == 0)
     }
     rows, total = svc.list_saved_view_tasks(sdb, space_id, view_id, page, page_size, filters)
+    ext_map = svc.get_ext_map(sdb, [r.id for r in rows])
     tag_map = tag_svc.get_task_tags_map(sdb, space_id, [r.id for r in rows])
     data = PageData[TaskOut](
-        list=[_task_out_with_tags(r, tag_map) for r in rows],
+        list=[_task_out_with_tags(r, tag_map, ext_map) for r in rows],
         total=total,
         page=page,
         page_size=page_size,
@@ -480,7 +585,7 @@ def remove_saved_view_members(
     payload: SavedViewRemoveMembers,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     """R4：从台账移除任务（批量）→ 台账强制转固化并锁定剩余成员。"""
     require_space_member(db, user, space_id)
@@ -495,7 +600,7 @@ def add_saved_view_members(
     payload: SavedViewAddMembers,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     """补充需求：向台账补充新增任务（动态引用台账将自动固化为成员集合）。"""
     require_space_member(db, user, space_id)
@@ -509,7 +614,7 @@ def export_saved_view_tasks(
     view_id: int,
     db: Session = Depends(get_db),
     sdb: Session = Depends(get_space_db),
-    user: CommonUser = Depends(get_current_user),
+    user: CommonUser = Depends(get_actor),
 ):
     require_space_member(db, user, space_id)
     content = svc.export_saved_view_tasks(sdb, space_id, view_id)

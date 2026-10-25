@@ -1,31 +1,48 @@
 <template>
-  <!-- 批量任务状态流转（先全部校验，任一非法整体拒绝） -->
+  <!-- 批量任务状态流转：选择某一维度与目标准值，整体更新（D1：维度独立） -->
   <el-dialog
     v-model="visible"
     title="批量流转状态"
-    width="420px"
+    width="440px"
     :close-on-click-modal="false"
   >
-    <p class="dialog-tip">将已选 {{ ids.length }} 个任务统一流转为指定迁移状态。</p>
-    <el-select v-model="status" placeholder="选择目标状态" style="width: 100%">
-      <el-option v-for="s in TASK_MIGRATION_STATUS_OPTIONS" :key="s" :label="s" :value="s" />
-    </el-select>
+    <p class="dialog-tip">将已选 {{ ids.length }} 个任务的「{{ dimLabel }}」统一流转为「{{ value }}」。</p>
+    <el-form label-width="96px" label-position="right">
+      <el-form-item label="状态维度">
+        <el-select v-model="dimension" placeholder="选择维度" style="width: 100%" @change="onDimChange">
+          <el-option v-for="d in STATUS_DIMENSIONS" :key="d.key" :label="d.label" :value="d.key" />
+        </el-select>
+      </el-form-item>
+      <el-form-item label="目标取值">
+        <el-select v-model="value" placeholder="选择目标取值" style="width: 100%" :disabled="!dimension">
+          <el-option v-for="s in valueOptions" :key="s" :label="s" :value="s" />
+        </el-select>
+      </el-form-item>
+    </el-form>
     <div class="dialog-note">
-      流转须符合状态机规则；若所选任务中存在不允许该流转的状态，整体将被拒绝并提示。
+      各状态维度相互独立、互不约束；所选任务原值可不同，将被统一覆盖为目标取值。
     </div>
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
-      <el-button type="primary" :loading="submitting" :disabled="!status" @click="submit">确定</el-button>
+      <el-button
+        type="primary"
+        :loading="submitting"
+        :disabled="!dimension || !value"
+        @click="submit"
+      >
+        确定
+      </el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { batchUpdateTaskStatus } from '@/api/task-migration'
-import { TASK_MIGRATION_STATUS_OPTIONS } from '@/types'
+import { STATUS_DIMENSION_MAP, STATUS_DIMENSIONS } from '@/utils/task-status'
+import type { StatusDimensionKey } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; scenarioId: number; ids: number[] }>()
 const emit = defineEmits<{
@@ -41,15 +58,27 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v),
 })
 
-const status = ref('')
+const dimension = ref<StatusDimensionKey | ''>('')
+const value = ref('')
 const submitting = ref(false)
 
+const dimLabel = computed(() => (dimension.value ? STATUS_DIMENSION_MAP[dimension.value]?.label ?? '' : ''))
+const valueOptions = computed(() =>
+  dimension.value ? STATUS_DIMENSION_MAP[dimension.value]?.options ?? [] : []
+)
+
+function onDimChange() {
+  value.value = ''
+}
+
 async function submit() {
+  if (!dimension.value || !value.value) return
   submitting.value = true
   try {
     const result = await batchUpdateTaskStatus(spaceId.value, props.scenarioId, {
       ids: props.ids,
-      status: status.value,
+      dimension: dimension.value,
+      value: value.value,
     })
     ElMessage.success(`已更新 ${result.affected} 条`)
     visible.value = false
@@ -58,6 +87,13 @@ async function submit() {
     submitting.value = false
   }
 }
+
+watch(visible, (open) => {
+  if (open) {
+    dimension.value = ''
+    value.value = ''
+  }
+})
 </script>
 
 <style scoped>

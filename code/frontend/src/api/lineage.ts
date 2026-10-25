@@ -1,6 +1,7 @@
 // 血缘管理（b07）接口封装
 import http from './request'
 import type {
+  LineageByTaskOut,
   LineageImportPayload,
   LineageOut,
   LineageParsedEdge,
@@ -59,6 +60,15 @@ export function getWorkflowOptions(spaceId: number, workflow: string) {
     url: `/b07/lineages/workflows/${encodeURIComponent(workflow)}/options`,
     method: 'GET',
     params: { space_id: spaceId },
+  })
+}
+
+/** 按（数仓项目空间 + 任务名称）聚合输入/输出表清单（去重，跨工作流合并），用于任务详情关联血缘展示（D5/D6） */
+export function getLineageByTask(spaceId: number, dwProjectSpace: string, taskName: string) {
+  return http<LineageByTaskOut>({
+    url: '/b07/lineages/by-task',
+    method: 'GET',
+    params: { space_id: spaceId, dw_project_space: dwProjectSpace, task_name: taskName },
   })
 }
 

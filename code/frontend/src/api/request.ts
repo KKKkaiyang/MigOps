@@ -18,6 +18,7 @@ export class BizError extends Error {
 
 // 统一请求封装：baseURL 指向后端 /api/v1，响应拦截器处理统一结构
 // { code, message, data }（code!==0 自动 ElMessage.error 并 reject），并剥离 data 返回。
+// config.silent=true 时仅 reject、不弹错误提示（用于非关键的增强数据，如血缘节点校验□）。
 const instance = axios.create({
   baseURL: '/api/v1',
   timeout: 15000,
@@ -35,6 +36,7 @@ instance.interceptors.request.use((config) => {
 instance.interceptors.response.use(
   (resp) => {
     const body = resp.data
+    const silent = !!(resp.config as { silent?: boolean })?.silent
     if (body && typeof body.code === 'number' && body.code !== 0) {
       // 登录态失效：清理本地状态并跳转登录页
       if (body.code === CODE_UNAUTHORIZED) {
@@ -47,11 +49,12 @@ instance.interceptors.response.use(
           window.location.assign(`/login?redirect=${redirect}`)
         }
       }
-      ElMessage.error(body.message || '请求失败')
+      // 非关键取数（silent）失败时不弹错误提示，避免干扰主流程
+      if (!silent) ElMessage.error(body.message || '请求失败')
       return Promise.reject(new BizError(body.message || '业务错误', body.code))
     }
-    // 剥离统一结构，直接返回 data 字段
-    return body?.data ?? body
+    // 成功：剥离统一结构，直接返回 data 字段
+    return body.data
   },
   (error: AxiosError) => {
     // 网络层 401（如直接命中间件）同样按登录失效处理
@@ -64,7 +67,7 @@ instance.interceptors.response.use(
     }
     const data = error.response?.data as { message?: string } | undefined
     const msg = data?.message || error.message || '网络错误'
-    ElMessage.error(msg)
+    if (!(error.config as { silent?: boolean })?.silent) ElMessage.error(msg)
     return Promise.reject(error)
   },
 )
@@ -73,7 +76,7 @@ instance.interceptors.response.use(
  * 类型安全的请求封装：泛型 T 即后端 data 字段的类型。
  * 调用方拿到的就是业务数据，无需再处理 AxiosResponse。
  */
-function http<T = unknown>(config: AxiosRequestConfig): Promise<T> {
+function http<T = unknown>(config: AxiosRequestConfig & { silent?: boolean }): Promise<T> {
   return instance.request<T>(config) as unknown as Promise<T>
 }
 

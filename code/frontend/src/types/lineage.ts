@@ -53,6 +53,18 @@ export interface LineageWorkflowOut {
   focus?: string | null
 }
 
+/** 按任务聚合的输入/输出表引用（含表类型） */
+export interface TableRef {
+  table: string
+  type?: string | null
+}
+
+/** 按任务（task_uri）聚合的输入/输出表清单（去重） */
+export interface LineageByTaskOut {
+  input_tables: TableRef[]
+  output_tables: TableRef[]
+}
+
 /** 工作流可选项（重建预填） */
 export interface LineageWorkflowOptions {
   workflow: string

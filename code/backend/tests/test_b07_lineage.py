@@ -1,6 +1,34 @@
 """b07 血缘管理功能测试：脚本解析、导入新增、重建、列表、工作流选项、删除。"""
 
+from sqlalchemy import text
+
+from app.database import get_space_engine
+
 from tests.conftest import API, assert_biz_error, assert_ok
+
+
+def test_b07_search_indexes_created(client, admin_headers, test_space):
+    """空间库 b07_lineage 应存在空间作用域复合索引（按表名/工作流/任务名检索加速）。"""
+    engine = get_space_engine(test_space["db_name"])
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT INDEX_NAME FROM information_schema.STATISTICS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b07_lineage'"
+            )
+        ).scalars().all()
+    expected = {
+        "idx_b07_space_workflow",
+        "idx_b07_space_task",
+        "idx_b07_space_proj_task",
+        "idx_b07_space_input",
+        "idx_b07_space_output",
+    }
+    assert expected.issubset(set(rows)), f"缺失索引: {expected - set(rows)}"
+    # 旧单列索引应已被清理
+    for old in ("idx_b07_workflow", "idx_b07_input", "idx_b07_output"):
+        assert old not in rows, f"旧索引未清理: {old}"
+
 
 
 SQL_SAMPLE = """

@@ -1,5 +1,5 @@
 <template>
-  <!-- 任务详情抽屉：全部字段 + 排查备注时间线（需求 §6.2.7 / §6.3） -->
+  <!-- 任务详情抽屉：基础字段 + 5 维独立状态 + 排查备注（需求 §6.2.7 / §6.3，D1/D3） -->
   <el-drawer
     v-model="visible"
     :title="task ? `任务详情：${task.task_name}` : '任务详情'"
@@ -7,62 +7,62 @@
   >
     <div v-loading="loading" class="detail-drawer">
       <template v-if="task">
+        <!-- 基础信息：项目名称/工作流名称/任务名称各占一行（B04-09） -->
         <el-descriptions :column="2" border size="small">
-          <el-descriptions-item label="任务名称">
+          <el-descriptions-item label="项目名称" :span="2">{{ task.project_name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="工作流名称" :span="2">
+            <span class="mono">{{ task.workflow_name || '—' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="任务名称" :span="2">
             <span class="mono">{{ task.task_name }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="工作流">
-            <span class="mono">{{ task.workflow_name }}</span>
+          <el-descriptions-item label="迁移负责人">{{ task.migration_owner || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="归属环境">{{ task.env || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="归属业务">{{ task.business || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="任务类型">{{ task.task_type || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="数据校验结果" :span="2">
+            <CheckResultTag :value="task.check_result" />
           </el-descriptions-item>
-          <el-descriptions-item label="脚本名称">
-            <span class="mono">{{ task.script_name || '—' }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="Owner">{{ task.owner || '—' }}</el-descriptions-item>
           <el-descriptions-item label="任务URI" :span="2">
             <span class="mono uri">{{ task.task_uri }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="输入表" :span="2">
-            <span class="mono">{{ task.input_tables || '—' }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="输出表" :span="2">
-            <span class="mono">{{ task.output_tables || '—' }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="迁移状态">
-            <TaskStatusTag :status="task.migration_status" />
-          </el-descriptions-item>
-          <el-descriptions-item label="调度状态">
-            <ScheduleStatusTag :status="task.schedule_status" />
-          </el-descriptions-item>
-          <el-descriptions-item label="校验状态">
-            <CheckStatusTag :status="task.check_status" />
-          </el-descriptions-item>
-          <el-descriptions-item label="更新时间">
+          <el-descriptions-item label="备注" :span="2">{{ task.remark || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="更新时间" :span="2">
             {{ formatTime(task.updated_at) }}
           </el-descriptions-item>
         </el-descriptions>
 
-        <!-- 状态流转（按状态机可选） -->
-        <div class="status-row" v-if="nextStatuses.length">
-          <span class="status-label">流转状态：</span>
-          <el-dropdown trigger="click" @command="changeStatus">
-            <el-button size="small">
-              选择目标状态<el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item v-for="s in nextStatuses" :key="s" :command="s">
-                  流转为「{{ s }}」
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+        <!-- 任务输出表（B04-10：血缘正式输出表，实时查询，非表模型字段；可点击弹出血缘对话框） -->
+        <div v-if="!hideOutputTables" class="output-block">
+          <div class="block-title">
+            任务输出表（血缘·正式表）
+            <span v-if="outputTables.length" class="count-badge">{{ outputTables.length }}</span>
+          </div>
+          <div v-loading="outputLoading" class="output-body">
+            <div v-if="outputTables.length" class="output-list">
+              <span
+                v-for="t in outputTables"
+                :key="t"
+                class="output-table mono"
+                @click="openLineage(t)"
+                >{{ t }}</span
+              >
+            </div>
+            <el-empty v-else description="暂无输出表（血缘中无该任务的正式输出表记录）" :image-size="60" />
+          </div>
         </div>
 
-        <!-- 数据血缘联动（交互评审 I7：带任务上下文跳转血缘页预置检索） -->
-        <div class="lineage-row">
-          <span class="status-label">数据血缘：</span>
-          <el-button size="small" @click="viewLineage">查看血缘</el-button>
-          <span class="lineage-hint">在血缘图中检索该任务的上下游关联</span>
+        <!-- 5 维状态：各自独立流转（D1） -->
+        <div class="status-block">
+          <div class="block-title">状态维度</div>
+          <div v-for="dim in STATUS_DIMENSIONS" :key="dim.key" class="status-line">
+            <span class="dim-label">{{ dim.label }}</span>
+            <TaskStatusCell
+              :dimension="dim.key"
+              :value="(task as Record<string, any>)[dim.key]"
+              @change="(v: string) => changeStatus(dim.key, v)"
+            />
+          </div>
         </div>
 
         <!-- 标签编辑 -->
@@ -109,32 +109,32 @@
     </div>
 
     <NoteFormDialog v-model="noteVisible" :task="task" @success="onNoteAdded" />
+    <LineageDialog v-model="lineageVisible" :space-id="spaceId" :focus-table="focusTable" />
   </el-drawer>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { ArrowDown } from '@element-plus/icons-vue'
-import TaskStatusTag from '@/components/common/TaskStatusTag.vue'
-import ScheduleStatusTag from '@/components/common/ScheduleStatusTag.vue'
-import CheckStatusTag from '@/components/common/CheckStatusTag.vue'
+import TaskStatusCell from './TaskStatusCell.vue'
+import CheckResultTag from '@/components/common/CheckResultTag.vue'
 import NoteFormDialog from './NoteFormDialog.vue'
 import TaskTagSelect from './TaskTagSelect.vue'
+import LineageDialog from '@/views/lineage/components/LineageDialog.vue'
 import { getTaskTags, listNotes, setTaskTags, updateTaskStatus } from '@/api/task-migration'
+import { getLineageByTask } from '@/api/lineage'
 import { formatTime } from '@/utils/format'
-import { TASK_STATUS_TRANSITIONS } from '@/types'
-import type { TaskNoteOut, TaskOut } from '@/types'
+import { STATUS_DIMENSIONS } from '@/utils/task-status'
+import type { StatusDimensionKey, TaskNoteOut, TaskOut } from '@/types'
 
-const props = defineProps<{ modelValue: boolean; task?: TaskOut | null }>()
+const props = defineProps<{ modelValue: boolean; task?: TaskOut | null; hideOutputTables?: boolean }>()
 const emit = defineEmits<{
   (e: 'update:modelValue', v: boolean): void
   (e: 'changed'): void
 }>()
 
 const route = useRoute()
-const router = useRouter()
 const spaceId = computed(() => Number(route.params.spaceId))
 
 const visible = computed({
@@ -148,9 +148,12 @@ const noteVisible = ref(false)
 const taskTags = ref<number[]>([])
 const tagSaving = ref(false)
 
-const nextStatuses = computed(() =>
-  props.task ? (TASK_STATUS_TRANSITIONS[props.task.migration_status] ?? []) : []
-)
+// 任务输出表（B04-10）：血缘正式输出表，按 project_name+task_name 实时查询
+const outputTables = ref<string[]>([])
+const outputLoading = ref(false)
+// 血缘对话框
+const lineageVisible = ref(false)
+const focusTable = ref('')
 
 watch(
   () => props.modelValue,
@@ -162,39 +165,52 @@ watch(
 async function load() {
   if (!props.task) return
   loading.value = true
+  outputTables.value = []
   try {
     notes.value = await listNotes(spaceId.value, props.task.id)
     const tags = await getTaskTags(spaceId.value, props.task.id)
     taskTags.value = tags.map((t) => t.id)
+    // 血缘上下文复用时不展示「任务输出表」区块，跳过查询（D5）
+    if (!props.hideOutputTables) {
+      await loadOutputTables()
+    }
   } finally {
     loading.value = false
   }
 }
 
-async function changeStatus(status: string) {
+/** 拉取该任务的血缘输出表，仅保留正式表（B04-10：过滤临时表） */
+async function loadOutputTables() {
   if (!props.task) return
-  await updateTaskStatus(spaceId.value, props.task.id, status)
-  ElMessage.success(`已流转为「${status}」`)
+  outputLoading.value = true
+  try {
+    const data = await getLineageByTask(
+      spaceId.value,
+      props.task.project_name,
+      props.task.task_name
+    )
+    outputTables.value = (data.output_tables || [])
+      .filter((t) => (t.type ?? '正式表') === '正式表')
+      .map((t) => t.table)
+  } catch {
+    /* 错误提示由请求拦截器统一处理 */
+  } finally {
+    outputLoading.value = false
+  }
+}
+
+/** 点击输出表 → 打开血缘对话框并聚焦该表（B04-10） */
+function openLineage(table: string) {
+  focusTable.value = table
+  lineageVisible.value = true
+}
+
+async function changeStatus(dimension: StatusDimensionKey, value: string) {
+  if (!props.task) return
+  await updateTaskStatus(spaceId.value, props.task.id, { [dimension]: value })
+  ;(props.task as Record<string, any>)[dimension] = value
+  ElMessage.success(`已更新为「${value}」`)
   emit('changed')
-  visible.value = false
-}
-
-/** 取首个表名（逗号分隔列表）：优先输出表，其次输入表 */
-function firstTable(value?: string | null): string | null {
-  if (!value) return null
-  const t = value.split(',')[0]?.trim()
-  return t || null
-}
-
-/** 查看血缘：携带任务的输入输出表名跳入，由血缘页预置聚焦检索（交互评审 I7） */
-function viewLineage() {
-  if (!props.task) return
-  const table = firstTable(props.task.output_tables) || firstTable(props.task.input_tables)
-  router.push({
-    name: 'space-lineage',
-    params: { spaceId: spaceId.value },
-    query: table ? { table } : {},
-  })
 }
 
 async function onNoteAdded() {
@@ -231,23 +247,73 @@ async function saveTags() {
   word-break: break-all;
 }
 
-.status-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
+.output-block {
+  margin-top: 16px;
 }
 
-.lineage-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
+.count-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  padding: 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  color: #fff;
+  background: #1a73e8;
+  border-radius: 9px;
 }
 
-.lineage-hint {
-  font-size: 11px;
-  color: var(--color-text-muted);
+.output-body {
+  min-height: 48px;
+}
+
+.output-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.output-table {
+  display: inline-block;
+  padding: 3px 8px;
+  font-size: 12px;
+  color: #1a73e8;
+  background: #eef4ff;
+  border: 1px solid #d6e4ff;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.output-table:hover {
+  background: #d6e4ff;
+}
+
+.status-block {
+  margin-top: 16px;
+}
+
+.block-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 10px;
+}
+
+.status-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.dim-label {
+  font-size: 13px;
+  color: var(--color-text-regular);
+  width: 110px;
 }
 
 .status-label {
@@ -259,7 +325,7 @@ async function saveTags() {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 14px;
+  margin-top: 16px;
 }
 
 .notes-section {

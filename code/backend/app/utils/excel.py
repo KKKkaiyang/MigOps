@@ -1,6 +1,6 @@
-"""Excel/CSV 导入导出工具（b03/b04 台账导入导出共用）。
+"""Excel/CSV 导入导出工具（b03/b04/b05 台账导入导出共用）。
 
-- 读取：.xlsx 经 openpyxl，.csv 经标准库 csv；返回 (表头, 行字典列表, 原始行号列表)；
+- 读取：.xlsx 经 openpyxl，.xls 经 xlrd，.csv 经标准库 csv；返回 (表头, 行字典列表, 原始行号列表)；
 - 生成：模板与导出均为 xlsx 字节流；
 - 日期单元格兼容 datetime 对象与字符串两种形态。
 """
@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MAX_IMPORT_ROWS = 5000
-ALLOWED_EXTENSIONS = (".xlsx", ".csv")
+ALLOWED_EXTENSIONS = (".xlsx", ".xls", ".csv")
 
 
 def check_import_file(filename: Optional[str]) -> None:
@@ -23,7 +23,7 @@ def check_import_file(filename: Optional[str]) -> None:
 
     name = (filename or "").lower()
     if not name.endswith(ALLOWED_EXTENSIONS):
-        raise BizError("仅支持 .xlsx 或 .csv 文件")
+        raise BizError("仅支持 .xls / .xlsx 或 .csv 文件")
 
 
 def read_tabular(content: bytes, filename: str) -> Tuple[List[str], List[dict], List[int]]:
@@ -31,6 +31,8 @@ def read_tabular(content: bytes, filename: str) -> Tuple[List[str], List[dict], 
     name = (filename or "").lower()
     if name.endswith(".csv"):
         return _read_csv(content)
+    if name.endswith(".xls"):
+        return _read_xls(content)
     return _read_xlsx(content)
 
 
@@ -74,6 +76,31 @@ def _read_xlsx(content: bytes) -> Tuple[List[str], List[dict], List[int]]:
         return headers, data, line_nos
     finally:
         wb.close()
+
+
+def _read_xls(content: bytes) -> Tuple[List[str], List[dict], List[int]]:
+    """读取旧版 .xls（BIFF，经 xlrd）；xlrd 2.x 仅支持 .xls，与 openpyxl 分工。"""
+    import xlrd
+
+    book = xlrd.open_workbook(file_contents=content)
+    sheet = book.sheet_by_index(0)
+    if sheet.nrows < 1:
+        return [], [], []
+    headers = [
+        str(sheet.cell_value(0, c)).strip() if sheet.ncols > c else "" for c in range(sheet.ncols)
+    ]
+    data, line_nos = [], []
+    for r in range(1, sheet.nrows):
+        row = [sheet.cell_value(r, c) for c in range(sheet.ncols)]
+        if not any(str(v).strip() for v in row):
+            continue
+        item = {}
+        for i, key in enumerate(headers):
+            v = row[i] if i < len(row) else ""
+            item[key] = v.strip() if isinstance(v, str) else v
+        data.append(item)
+        line_nos.append(r + 1)
+    return headers, data, line_nos
 
 
 def _to_str(value) -> str:

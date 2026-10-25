@@ -9,14 +9,15 @@
             <span v-if="scenario" class="page-scenario">{{ scenario.name }}</span>
           </span>
           <div class="head-actions">
-            <el-button :disabled="!scenarioId" @click="importVisible = true">导入任务台账</el-button>
+            <el-button @click="templateVisible = true">配置字段模板</el-button>
+            <el-button :disabled="!scenarioId" @click="importVisible = true">导入基础数据</el-button>
             <el-button :disabled="!scenarioId" @click="exportTasks">导出</el-button>
-            <el-button :disabled="!scenarioId" @click="openSaveView">保存为台账</el-button>
+            <el-button :disabled="!scenarioId" @click="openSaveView">保存为视图</el-button>
             <el-button :disabled="!scenarioId || selection.length === 0" @click="createFromTasksVisible = true">
-              创建台账（{{ selection.length }}）
+              创建视图（{{ selection.length }}）
             </el-button>
             <el-button :disabled="!scenarioId || selection.length === 0" type="success" plain @click="addToLedgerVisible = true">
-              添加到台账（{{ selection.length }}）
+              添加到视图（{{ selection.length }}）
             </el-button>
           </div>
         </div>
@@ -51,33 +52,27 @@
           <el-table-column label="任务" min-width="220">
             <template #default="{ row }">
               <div class="task-cell">
-                <span class="mono task-name">{{ row.task_name }}</span>
-                <span v-if="row.script_name" class="task-script mono">{{ row.script_name }}</span>
+                <span class="mono task-name" @click="openDetail(row as TaskOut)">{{ row.task_name }}</span>
               </div>
             </template>
           </el-table-column>
-          <el-table-column prop="workflow_name" label="工作流" width="140">
-            <template #default="{ row }"><span class="mono">{{ row.workflow_name }}</span></template>
-          </el-table-column>
-          <el-table-column prop="owner" label="Owner" width="80" />
-          <el-table-column label="迁移状态" width="150">
-            <template #default="{ row }">
-              <TaskStatusCell
-                :status="row.migration_status"
-                @change="(c: string) => changeStatus(row as TaskOut, c)"
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="调度状态" width="110">
-            <template #default="{ row }">
-              <ScheduleStatusTag :status="row.schedule_status" />
-            </template>
-          </el-table-column>
-          <el-table-column label="校验状态" width="110">
-            <template #default="{ row }">
-              <CheckStatusTag :status="row.check_status" />
-            </template>
-          </el-table-column>
+          <template v-for="field in tpl.listFields.value" :key="field.field_key">
+            <el-table-column :label="field.field_label" min-width="140">
+              <template #default="{ row }">
+                <TaskStatusCell
+                  v-if="tpl.isStatusField(field)"
+                  :dimension="field.field_key as StatusDimensionKey"
+                  :value="tpl.cellValue(row as TaskOut, field)"
+                  @change="(v: string) => changeStatus(row as TaskOut, field.field_key as StatusDimensionKey, v)"
+                />
+                <CheckResultTag
+                  v-else-if="field.field_key === 'check_result'"
+                  :value="tpl.cellValue(row as TaskOut, field)"
+                />
+                <span v-else class="cell-text">{{ tpl.cellValue(row as TaskOut, field) || '—' }}</span>
+              </template>
+            </el-table-column>
+          </template>
           <el-table-column label="标签" min-width="180">
             <template #default="{ row }">
               <TaskTagCell
@@ -99,7 +94,7 @@
             </template>
           </el-table-column>
           <template #empty>
-            <span class="muted">暂无任务，点击「导入任务台账」开始</span>
+            <span class="muted">暂无任务，点击「导入基础数据」开始</span>
           </template>
         </el-table>
 
@@ -142,6 +137,11 @@
       @success="onAddedToLedger"
     />
     <ImportDialog v-model="importVisible" :scenario-id="scenarioId ?? 0" @success="load" />
+    <TemplateConfigDialog
+      v-model="templateVisible"
+      :space-id="spaceId"
+      @saved="onTemplateSaved"
+    />
     <BatchTagDialog
       v-model="batchTagVisible"
       :scenario-id="scenarioId ?? 0"
@@ -152,13 +152,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import ScheduleStatusTag from '@/components/common/ScheduleStatusTag.vue'
-import CheckStatusTag from '@/components/common/CheckStatusTag.vue'
 import TaskFilterBar from './components/TaskFilterBar.vue'
 import TaskStatusCell from './components/TaskStatusCell.vue'
+import CheckResultTag from '@/components/common/CheckResultTag.vue'
 import BatchStatusDialog from './components/BatchStatusDialog.vue'
 import TaskDetailDrawer from './components/TaskDetailDrawer.vue'
 import SaveViewDialog from './components/SaveViewDialog.vue'
@@ -166,15 +165,19 @@ import ImportDialog from './components/ImportDialog.vue'
 import BatchTagDialog from './components/BatchTagDialog.vue'
 import TaskTagCell from './components/TaskTagCell.vue'
 import AddToLedgerDialog from './components/AddToLedgerDialog.vue'
+import TemplateConfigDialog from './components/TemplateConfigDialog.vue'
 import { listTasks, updateTaskStatus } from '@/api/task-migration'
 import { useTagStore } from '@/store/tags'
 import { useScenarioStore } from '@/store/scenario'
+import { useTemplate } from '@/composables/useTemplate'
 import { downloadFile } from '@/utils/download'
 import { formatTime } from '@/utils/format'
-import type { TaskOut } from '@/types'
+import type { StatusDimensionKey, TaskOut } from '@/types'
 
 const route = useRoute()
 const spaceId = computed(() => Number(route.params.spaceId))
+
+const tpl = useTemplate(spaceId.value)
 
 /** 场景上下文：空间级 store 维护（跨导航保持，I2） */
 const scenarioStore = useScenarioStore()
@@ -191,25 +194,17 @@ const pageSize = ref(20)
 const loading = ref(false)
 const selection = ref<TaskOut[]>([])
 
-interface TaskFilters {
-  keyword: string
-  workflow_name: string
-  migration_status: string
-  schedule_status: string
-  check_status: string
-  owner: string
-  tag_ids: number[]
-  tag_match: string
-}
-
-const filters = ref<TaskFilters>({
+const filters = reactive<Record<string, any>>({
   keyword: '',
   workflow_name: '',
+  project_name: '',
+  migration_owner: '',
+  active_status: '',
   migration_status: '',
-  schedule_status: '',
+  dualrun_status: '',
   check_status: '',
-  owner: '',
-  tag_ids: [],
+  acceptance_status: '',
+  tag_ids: [] as number[],
   tag_match: 'all',
 })
 
@@ -221,18 +216,20 @@ const createFromTasksVisible = ref(false)
 const importVisible = ref(false)
 const batchTagVisible = ref(false)
 const addToLedgerVisible = ref(false)
+const templateVisible = ref(false)
 
-/** 当前生效的筛选条件（保存为台账时使用） */
+/** 当前生效的筛选条件（保存为视图时使用） */
 const activeFilters = computed<Record<string, unknown>>(() => {
-  const f = filters.value
+  const f = filters
   const out: Record<string, unknown> = {}
   if (f.keyword) out.keyword = f.keyword
   if (f.workflow_name) out.workflow_name = f.workflow_name
-  if (f.migration_status) out.migration_status = f.migration_status
-  if (f.schedule_status) out.schedule_status = f.schedule_status
-  if (f.check_status) out.check_status = f.check_status
-  if (f.owner) out.owner = f.owner
-  if (f.tag_ids.length) out.tag_ids = f.tag_ids
+  if (f.project_name) out.project_name = f.project_name
+  if (f.migration_owner) out.migration_owner = f.migration_owner
+  for (const k of ['active_status', 'migration_status', 'dualrun_status', 'check_status', 'acceptance_status']) {
+    if (f[k]) out[k] = f[k]
+  }
+  if (Array.isArray(f.tag_ids) && f.tag_ids.length) out.tag_ids = f.tag_ids
   if (f.tag_match !== 'all') out.tag_match = f.tag_match
   return out
 })
@@ -246,17 +243,20 @@ async function load() {
   loading.value = true
   try {
     const data = await listTasks(spaceId.value, scenarioId.value, page.value, pageSize.value, {
-      keyword: filters.value.keyword || undefined,
-      workflow_name: filters.value.workflow_name || undefined,
-      migration_status: filters.value.migration_status || undefined,
-      schedule_status: filters.value.schedule_status || undefined,
-      check_status: filters.value.check_status || undefined,
-      owner: filters.value.owner || undefined,
+      keyword: filters.keyword || undefined,
+      workflow_name: filters.workflow_name || undefined,
+      project_name: filters.project_name || undefined,
+      migration_owner: filters.migration_owner || undefined,
+      active_status: filters.active_status || undefined,
+      migration_status: filters.migration_status || undefined,
+      dualrun_status: filters.dualrun_status || undefined,
+      check_status: filters.check_status || undefined,
+      acceptance_status: filters.acceptance_status || undefined,
       tag_ids:
-        Array.isArray(filters.value.tag_ids) && filters.value.tag_ids.length
-          ? (filters.value.tag_ids as number[])
+        Array.isArray(filters.tag_ids) && filters.tag_ids.length
+          ? (filters.tag_ids as number[])
           : undefined,
-      tag_match: filters.value.tag_match !== 'all' ? (filters.value.tag_match as 'all' | 'any') : undefined,
+      tag_match: filters.tag_match !== 'all' ? (filters.tag_match as 'all' | 'any') : undefined,
     })
     list.value = data.list
     total.value = data.total
@@ -266,7 +266,7 @@ async function load() {
 }
 
 function onFilterUpdate(payload: { key: string; value: string | number[] }) {
-  ;(filters.value as Record<string, string | number[]>)[payload.key] = payload.value
+  filters[payload.key] = payload.value
 }
 
 function search() {
@@ -275,16 +275,19 @@ function search() {
 }
 
 function resetFilters() {
-  filters.value = {
+  Object.assign(filters, {
     keyword: '',
     workflow_name: '',
+    project_name: '',
+    migration_owner: '',
+    active_status: '',
     migration_status: '',
-    schedule_status: '',
+    dualrun_status: '',
     check_status: '',
-    owner: '',
+    acceptance_status: '',
     tag_ids: [],
     tag_match: 'all',
-  }
+  })
   search()
 }
 
@@ -297,9 +300,9 @@ function onPage(p: number) {
   load()
 }
 
-async function changeStatus(row: TaskOut, status: string) {
-  await updateTaskStatus(spaceId.value, row.id, status)
-  ElMessage.success(`已流转为「${status}」`)
+async function changeStatus(row: TaskOut, dimension: StatusDimensionKey, value: string) {
+  await updateTaskStatus(spaceId.value, row.id, { [dimension]: value })
+  ElMessage.success(`已更新为「${value}」`)
   await load()
 }
 
@@ -322,7 +325,7 @@ function openDetail(row: TaskOut) {
 
 function openSaveView() {
   if (Object.keys(activeFilters.value).length === 0) {
-    ElMessage.warning('请先设置筛选条件，再保存为台账')
+    ElMessage.warning('请先设置筛选条件，再保存为视图')
     return
   }
   saveViewVisible.value = true
@@ -334,29 +337,35 @@ function onViewSaved() {
 
 function onCreatedFromTasks() {
   createFromTasksVisible.value = false
-  ElMessage.success('已基于勾选任务创建固定名单台账')
+  ElMessage.success('已基于勾选任务创建固定名单视图')
   clearSelection()
 }
 
-/** 勾选任务加入已有台账（目标台账在对话框内选择） */
+/** 勾选任务加入已有视图（目标视图在对话框内选择） */
 function onAddedToLedger() {
   addToLedgerVisible.value = false
   clearSelection()
 }
 
+function onTemplateSaved() {
+  templateVisible.value = false
+  tpl.load(true)
+  load()
+}
+
 async function exportTasks() {
   const params: Record<string, unknown> = { space_id: spaceId.value }
-  const f = filters.value
+  const f = filters
   if (f.keyword) params.keyword = f.keyword
   if (f.workflow_name) params.workflow_name = f.workflow_name
-  if (f.migration_status) params.migration_status = f.migration_status
-  if (f.schedule_status) params.schedule_status = f.schedule_status
-  if (f.check_status) params.check_status = f.check_status
-  if (f.owner) params.owner = f.owner
-  // 标签维度纳入导出筛选，与列表查询保持一致
+  if (f.project_name) params.project_name = f.project_name
+  if (f.migration_owner) params.migration_owner = f.migration_owner
+  for (const k of ['active_status', 'migration_status', 'dualrun_status', 'check_status', 'acceptance_status']) {
+    if (f[k]) params[k] = f[k]
+  }
   if (Array.isArray(f.tag_ids) && f.tag_ids.length) params.tag_ids = (f.tag_ids as number[]).join(',')
   if (f.tag_match && f.tag_match !== 'all') params.tag_match = f.tag_match
-  await downloadFile(`/b04/scenarios/${scenarioId.value}/tasks/export`, params, '任务台账.xlsx')
+  await downloadFile(`/b04/scenarios/${scenarioId.value}/tasks/export`, params, '任务视图.xlsx')
 }
 
 /** 场景切换（空间头切换器）→ 重置分页与选择并重载 */
@@ -369,10 +378,33 @@ watch(
   }
 )
 
+/**
+ * 从血缘管理（b07）临时表上下文跳转而来时，按 工作流 + 任务 预置筛选并定位（R3 跨模块联动）。
+ */
+function applyLineageJump() {
+  const q = route.query
+  const workflow = typeof q.workflow === 'string' ? q.workflow : ''
+  const task = typeof q.task === 'string' ? q.task : ''
+  if (!workflow && !task) return
+  if (workflow) filters.workflow_name = workflow
+  if (task) filters.keyword = task
+  search()
+}
+
+watch(
+  () => route.query,
+  (q) => {
+    if (typeof q.workflow === 'string' || typeof q.task === 'string') applyLineageJump()
+  },
+  { deep: true }
+)
+
 onMounted(async () => {
   await scenarioStore.ensureB04(spaceId.value)
   await tagStore.ensure(spaceId.value)
+  await tpl.load()
   await load()
+  applyLineageJump()
 })
 </script>
 
@@ -427,11 +459,17 @@ onMounted(async () => {
 .task-name {
   font-size: 13px;
   font-weight: 600;
+  cursor: pointer;
+  color: var(--color-primary);
 }
 
-.task-script {
-  font-size: 11px;
-  color: var(--color-text-muted);
+.task-name:hover {
+  text-decoration: underline;
+}
+
+.cell-text {
+  font-size: 13px;
+  color: var(--color-text-regular);
 }
 
 .mono {

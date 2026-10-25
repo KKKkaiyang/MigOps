@@ -41,7 +41,11 @@ class B07Lineage(SpaceBase):
     deleted_at = Column(DateTime, comment="逻辑删除时间")
 
     __table_args__ = (
-        Index("idx_b07_workflow", "workflow_name"),
-        Index("idx_b07_input", "input_table"),
-        Index("idx_b07_output", "output_table"),
+        # 空间作用域复合索引：所有查询均以 space_id 起手，前缀 space_id 可避免全表扫描，
+        # 并在按 表名称/工作流名称/任务名称 检索与 D5 任务详情关联时命中对应列。
+        Index("idx_b07_space_workflow", "space_id", "workflow_name"),
+        Index("idx_b07_space_task", "space_id", "task_name"),
+        Index("idx_b07_space_proj_task", "space_id", "project_name", "task_name"),
+        Index("idx_b07_space_input", "space_id", "input_table"),
+        Index("idx_b07_space_output", "space_id", "output_table"),
     )

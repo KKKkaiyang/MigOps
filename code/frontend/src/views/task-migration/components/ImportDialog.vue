@@ -1,8 +1,8 @@
 <template>
-  <!-- 导入任务台账（需求 §6.2.2：覆盖 / 增量两种模式） -->
+  <!-- 导入基础数据（原名「导入任务台账」，需求优化：功能不变仅改名） -->
   <el-dialog
     v-model="visible"
-    title="导入任务台账"
+    title="导入基础数据"
     width="560px"
     :close-on-click-modal="false"
   >
@@ -14,7 +14,8 @@
             <el-radio value="incremental">增量导入</el-radio>
           </el-radio-group>
           <div class="mode-tip">
-            覆盖导入：按任务URI更新已存在行的导入字段；增量导入：仅插入新任务，已存在行跳过。
+            覆盖导入：按任务URI更新已存在行的导入字段；增量导入：仅插入新任务，已存在行跳过。<br />
+            仅「项目名称、任务名称」为必填，其他字段可留空（留空将清空原值）。
           </div>
         </el-form-item>
       </el-form>
@@ -37,12 +38,12 @@
         <div class="upload-inner">
           <el-icon :size="32" color="#8a96a3"><UploadFilled /></el-icon>
           <div class="upload-text">将文件拖到此处，或<em>点击上传</em></div>
-          <div class="upload-sub">仅支持 .xlsx / .csv，单次最多 5000 行</div>
+          <div class="upload-sub">仅支持 .xlsx / .csv，单次最多 50000 行</div>
         </div>
       </el-upload>
       <div class="template-row">
         <span>不知道格式？</span>
-        <el-button link type="primary" @click="downloadTemplate">下载导入模板</el-button>
+        <el-button link type="primary" @click="downloadTemplate(spaceId)">下载导入模板</el-button>
       </div>
     </div>
 
@@ -82,8 +83,7 @@ import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import type { UploadFile, UploadFiles, UploadInstance } from 'element-plus'
-import { importTasks } from '@/api/task-migration'
-import { downloadFile } from '@/utils/download'
+import { importTasks, downloadTemplate as downloadTemplateFile } from '@/api/task-migration'
 import type { ImportResult } from '@/types'
 
 const props = defineProps<{ modelValue: boolean; scenarioId: number }>()
@@ -136,12 +136,8 @@ function onExceed(files: File[]) {
   }
 }
 
-async function downloadTemplate() {
-  await downloadFile(
-    `/b04/scenarios/${props.scenarioId}/tasks/template`,
-    { space_id: spaceId.value },
-    '任务台账导入模板.xlsx'
-  )
+async function downloadTemplate(spaceId: number) {
+  await downloadTemplateFile(spaceId)
 }
 
 async function submit() {

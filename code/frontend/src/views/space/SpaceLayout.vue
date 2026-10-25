@@ -1,9 +1,18 @@
 <template>
-  <!-- 项目空间视图框架：侧边分组导航 + 空间头（分区 + 场景切换器常驻）+ 子页面 -->
+  <!-- 项目空间视图框架：侧边分组导航（支持收起/展开）+ 空间头（分区 + 场景切换器常驻）+ 子页面 -->
   <div class="space-view" v-loading="loading">
     <div class="space-body">
       <!-- 侧边分组导航（交互评审 I1：按业务阶段分组，任务列表/台账/标签收纳为任务迁移子项） -->
-      <aside class="sidebar">
+      <aside v-if="!collapsed" class="sidebar">
+        <!-- 收起按钮（LAYOUT-01/D4：收起后侧边栏完全隐藏，右缘留展开按钮） -->
+        <div class="side-toggle">
+          <el-tooltip content="收起菜单" placement="right">
+            <el-button link class="toggle-btn" @click="toggleCollapsed">
+              <span class="toggle-ico">«</span><span class="toggle-text">收起</span>
+            </el-button>
+          </el-tooltip>
+        </div>
+
         <div class="side-group">
           <router-link class="side-item" :to="{ name: 'space-overview', params: { spaceId } }">
             <span class="ico">🏠</span>空间概览
@@ -31,13 +40,20 @@
             <router-link class="side-item" :to="{ name: 'space-tasks', params: { spaceId } }">
               任务列表<span v-if="stats" class="side-badge">{{ stats.b04_task_total }}</span>
             </router-link>
-            <router-link class="side-item" :to="{ name: 'space-ledgers', params: { spaceId } }">
-              任务台账<span v-if="stats" class="side-badge">{{ stats.b04_view_count }}</span>
+            <router-link class="side-item" :to="{ name: 'space-task-views', params: { spaceId } }">
+              任务视图<span v-if="stats" class="side-badge">{{ stats.b04_view_count }}</span>
             </router-link>
             <router-link class="side-item" :to="{ name: 'space-tags', params: { spaceId } }">
               标签管理<span v-if="stats" class="side-badge">{{ stats.b06_tag_count }}</span>
             </router-link>
           </div>
+        </div>
+
+        <div class="side-group">
+          <div class="side-group-title">数据校验</div>
+          <router-link class="side-item" :to="{ name: 'space-data-checks', params: { spaceId } }">
+            <span class="ico">✅</span>数据校验
+          </router-link>
         </div>
 
         <div class="side-group">
@@ -47,6 +63,15 @@
           </router-link>
         </div>
       </aside>
+
+      <!-- 收起态：侧边栏完全隐藏，仅留展开按钮窄条，右边面板自适应撑满（LAYOUT-01/D4） -->
+      <div v-else class="side-collapsed-bar">
+        <el-tooltip content="展开菜单" placement="right">
+          <el-button link class="toggle-btn expand" @click="toggleCollapsed">
+            <span class="toggle-ico">»</span>
+          </el-button>
+        </el-tooltip>
+      </div>
 
       <!-- 主内容区 -->
       <div class="space-main">
@@ -86,7 +111,7 @@
             <div class="head-chip">
               <span class="k">整体进展（自评）</span>
               <div class="progress-mini">
-                <div class="bar"><i :style="{ width: `${space?.overall_progress ?? 0}%` }" /></div>
+                <div class="bar"><i :style="{ width: (space?.overall_progress ?? 0) + '%' }" /></div>
                 <span class="num">{{ space?.overall_progress ?? 0 }}%</span>
                 <el-button v-if="canEditSpace" link type="primary" size="small" @click="editVisible = true">编辑</el-button>
               </div>
@@ -140,8 +165,21 @@ const b04Scenarios = ref<TaskScenarioOut[]>([])
 /** 任务迁移子导航：路由在任务模块内或用户手动展开时保持展开 */
 const taskGroupOpen = ref(false)
 const inTaskModule = computed(() =>
-  ['space-tasks', 'space-ledgers', 'space-saved-view', 'space-tags'].includes(String(route.name))
+  ['space-tasks', 'space-task-views', 'space-custom-view', 'space-tags'].includes(String(route.name))
 )
+
+/**
+ * 侧边菜单收起/展开（LAYOUT-01，D4：收起后完全隐藏，留展开按钮，右边面板自适应）。
+ * 状态持久化到 localStorage，刷新/切页/切空间后保持；默认展开。
+ */
+const SIDEBAR_COLLAPSED_KEY = 'migops:space:sidebar-collapsed'
+const collapsed = ref(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1')
+
+function toggleCollapsed() {
+  collapsed.value = !collapsed.value
+  localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed.value ? '1' : '0')
+  if (!collapsed.value) taskGroupOpen.value = false
+}
 
 const routeLine = computed(() => {
   const s = space.value
@@ -157,10 +195,12 @@ const roleLabel = computed(() => {
 /** 空间信息编辑（整体进展等）：L0 或本空间 L1 */
 const canEditSpace = computed(() => userStore.isL0 || space.value?.my_role === 'L1')
 
-// ── 场景切换器（仅 b03/b04 页面激活） ──
+// ── 场景切换器（b03/b04 页面激活；b05 数据校验跟随 b03 场景，D2） ──
 const pickerModule = computed<'b03' | 'b04' | null>(() => {
   const m = route.meta.module
-  return m === 'b03' || m === 'b04' ? m : null
+  if (m === 'b03' || m === 'b04') return m
+  if (m === 'b05') return 'b03' // 数据校验页切换的是 b03 迁移场景（库表清单口径）
+  return null
 })
 
 const pickerScenarios = computed(() => {
@@ -234,7 +274,7 @@ async function removeScenario() {
   } else if (pickerModule.value === 'b04') {
     if (!scenarioStore.b04) return
     await ElMessageBox.confirm(
-      `删除场景将级联删除「${scenarioStore.b04.name}」下全部任务、备注与自定义台账，确认删除？`,
+      `删除场景将级联删除「${scenarioStore.b04.name}」下全部任务、备注与自定义视图，确认删除？`,
       '删除场景',
       { type: 'warning' }
     )
@@ -295,6 +335,46 @@ onMounted(async () => {
   padding: 12px 8px;
   position: sticky;
   top: 84px;
+}
+
+.side-toggle {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.toggle-btn {
+  height: auto;
+  padding: 2px 6px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.toggle-btn:hover {
+  color: var(--color-primary);
+}
+
+.toggle-ico {
+  font-weight: 700;
+}
+
+.toggle-text {
+  margin-left: 4px;
+}
+
+/* ── 收起态窄条：仅承载展开按钮 ── */
+.side-collapsed-bar {
+  flex-shrink: 0;
+  width: 28px;
+  position: sticky;
+  top: 84px;
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+}
+
+.side-collapsed-bar .toggle-btn.expand {
+  padding: 6px 4px;
 }
 
 .side-group {

@@ -1,13 +1,13 @@
 <template>
-  <!-- 迁移状态单元格：标签 + 按状态机可选的目标状态下拉（BRD 4.2） -->
+  <!-- 5 维状态单元格：标签 + 同维度可选目标值下拉（D1：各维度独立，互不约束） -->
   <el-dropdown trigger="click" @command="(c: string) => emit('change', c)">
     <span class="status-drop">
-      <TaskStatusTag :status="status" />
-      <el-icon v-if="nextStatuses.length"><ArrowDown /></el-icon>
+      <StatusTag :value="value" />
+      <el-icon v-if="options.length"><ArrowDown /></el-icon>
     </span>
     <template #dropdown>
       <el-dropdown-menu>
-        <el-dropdown-item v-for="s in nextStatuses" :key="s" :command="s">
+        <el-dropdown-item v-for="s in options" :key="s" :command="s">
           流转为「{{ s }}」
         </el-dropdown-item>
       </el-dropdown-menu>
@@ -18,14 +18,14 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { ArrowDown } from '@element-plus/icons-vue'
-import TaskStatusTag from '@/components/common/TaskStatusTag.vue'
-import { TASK_STATUS_TRANSITIONS } from '@/types'
+import StatusTag from '@/components/common/StatusTag.vue'
+import { STATUS_DIMENSION_MAP } from '@/utils/task-status'
+import type { StatusDimensionKey } from '@/types'
 
-const props = defineProps<{ status: string }>()
+const props = defineProps<{ dimension: StatusDimensionKey; value?: string | null }>()
+const emit = defineEmits<{ (e: 'change', value: string): void }>()
 
-const emit = defineEmits<{ (e: 'change', status: string): void }>()
-
-const nextStatuses = computed(() => TASK_STATUS_TRANSITIONS[props.status] ?? [])
+const options = computed(() => STATUS_DIMENSION_MAP[props.dimension]?.options ?? [])
 </script>
 
 <style scoped>

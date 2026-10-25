@@ -156,11 +156,32 @@ def _space_column_exists(conn, table: str, column: str) -> bool:
     return bool(row)
 
 
-def _apply_space_additive_migrations(engine: Engine) -> None:
-    """空间库增量 DDL：create_all 仅能建缺失表，不能加列。
+def _index_exists(conn, index_name: str) -> bool:
+    """空间库内索引是否已存在（幂等 DDL 前置判断）。"""
+    row = conn.execute(
+        text(
+            "SELECT COUNT(*) FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = :i"
+        ),
+        {"i": index_name},
+    ).scalar()
+    return bool(row)
 
-    当前无 Alembic，新增列（如 b04_saved_view.view_mode）在此以幂等方式补齐；
-    新表由 init_space_models 的 create_all 自动建好。
+
+def _ensure_index(conn, table: str, index_name: str, columns: list) -> None:
+    """幂等创建索引（仅当不存在时）。"""
+    if not _index_exists(conn, index_name):
+        cols = ", ".join(f"`{c}`" for c in columns)
+        conn.execute(text(f"CREATE INDEX `{index_name}` ON `{table}` ({cols})"))
+
+
+def _apply_space_additive_migrations(engine: Engine) -> None:
+    """空间库增量 DDL：create_all 仅能建缺失表，不能加列/改列。
+
+    当前无 Alembic，新增/删除列在此以幂等方式补齐/清理（见需求 D1~D4 重塑）：
+    - b04_task 重塑：删除旧列（开发态清空重建，丢弃旧数据，决策①），补齐 5 维状态等新列；
+    - 新表 b04_task_ext / b04_migration_template 由 init_space_models 的 create_all 自动建好。
+    - b07 血缘检索加速：空间作用域复合索引（按 表名称/工作流名称/任务名称 检索慢，bug 修复）。
     """
     with engine.begin() as conn:
         if not _space_column_exists(conn, "b04_saved_view", "view_mode"):
@@ -177,6 +198,116 @@ def _apply_space_additive_migrations(engine: Engine) -> None:
                     "VARCHAR(16) NOT NULL DEFAULT '技术标签' COMMENT '标签分类: 管理标签 / 技术标签'"
                 )
             )
+        # ── b04_task 重塑（D1~D3）：删除旧列（开发态清空重建，丢弃旧数据） ──
+        _OLD_B04_TASK_COLS = [
+            "script_name",
+            "input_tables",
+            "output_tables",
+            "schedule_status",
+            "dw_project_space",
+            "owner",
+            "latest_note",
+        ]
+        for col in _OLD_B04_TASK_COLS:
+            if _space_column_exists(conn, "b04_task", col):
+                conn.execute(text(f"ALTER TABLE b04_task DROP COLUMN `{col}`"))
+        # 补齐 b04_task 新列（create_all 已建表时一并创建；此处覆盖存量旧表升级场景）
+        # B04-08 导入放宽：env/迁移负责人/5 维状态/数据校验结果改可空且不设默认值
+        # （显式 NULL 需能落库；任务创建仅经导入路径，无需默认值）
+        _NEW_B04_TASK_COLS = {
+            "project_name": "VARCHAR(128) NOT NULL DEFAULT 'default'",
+            "env": "VARCHAR(32) NULL",
+            "business": "VARCHAR(255) NULL",
+            "task_type": "VARCHAR(64) NULL",
+            "migration_owner": "VARCHAR(64) NULL",
+            "active_status": "VARCHAR(32) NULL",
+            "migration_status": "VARCHAR(32) NULL",
+            "dualrun_status": "VARCHAR(32) NULL",
+            "check_status": "VARCHAR(32) NULL",
+            "acceptance_status": "VARCHAR(32) NULL",
+            "remark": "VARCHAR(1024) NULL",
+            "check_result": "VARCHAR(32) NULL",
+        }
+        for col, ddl in _NEW_B04_TASK_COLS.items():
+            if not _space_column_exists(conn, "b04_task", col):
+                conn.execute(
+                    text(f"ALTER TABLE b04_task ADD COLUMN `{col}` {ddl} COMMENT 'b04重塑新增'")
+                )
+        # B04-08：存量 NOT NULL 列幂等改可空（导入仅强制 项目名称+任务名称，其余可留空）
+        for col in (
+            "env",
+            "migration_owner",
+            "active_status",
+            "migration_status",
+            "dualrun_status",
+            "check_result",
+        ):
+            nullable = conn.execute(
+                text(
+                    "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b04_task' AND COLUMN_NAME = :c"
+                ),
+                {"c": col},
+            ).scalar()
+            if nullable == "NO":
+                conn.execute(
+                    text(f"ALTER TABLE b04_task MODIFY COLUMN `{col}` {_NEW_B04_TASK_COLS[col]}")
+                )
+
+        # ── b07 血缘检索加速：空间作用域复合索引（按 表名称/工作流名称/任务名称 检索慢） ──
+        # 新空间由 create_all 直接建好；存量空间（如 lineage_demo）在此幂等补齐。
+        _ensure_index(conn, "b07_lineage", "idx_b07_space_workflow", ["space_id", "workflow_name"])
+        _ensure_index(conn, "b07_lineage", "idx_b07_space_task", ["space_id", "task_name"])
+        _ensure_index(conn, "b07_lineage", "idx_b07_space_proj_task", ["space_id", "project_name", "task_name"])
+        _ensure_index(conn, "b07_lineage", "idx_b07_space_input", ["space_id", "input_table"])
+        _ensure_index(conn, "b07_lineage", "idx_b07_space_output", ["space_id", "output_table"])
+        # 清理被取代的旧单列索引（幂等）
+        for _old in ("idx_b07_workflow", "idx_b07_input", "idx_b07_output"):
+            if _index_exists(conn, _old):
+                conn.execute(text(f"DROP INDEX `{_old}` ON `b07_lineage`"))
+
+
+# 扩展列名白名单：仅允许 f_<数字>，防止动态 DDL 注入（需求 §9.4）
+_EXT_COL_RE = re.compile(r"^f_[0-9]+$")
+
+
+def ensure_task_ext_columns(engine: Engine, ext_field_defs: list) -> None:
+    """按空间模板的扩展字段定义（有序）对 b04_task_ext 动态加列 / 删列（D4）。
+
+    ext_field_defs: 列表，每项 {"name": "f_1", "ext_type": "enum"|"string"}，
+                    顺序即列编号（f_1、f_2 …）。enum 默认建索引、string 默认 VARCHAR(255)。
+    开发态清空重建：删除不在目标集的 f_n 列（保留 task_id）。
+    """
+    with engine.begin() as conn:
+        existing_cols = set(
+            conn.execute(
+                text(
+                    "SELECT COLUMN_NAME FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'b04_task_ext'"
+                )
+            ).scalars().all()
+        )
+        target_cols = {d["name"] for d in ext_field_defs}
+        # 新增缺失列
+        for d in ext_field_defs:
+            col = d["name"]
+            if not _EXT_COL_RE.match(col):
+                raise ValueError(f"非法的扩展列名: {col}")
+            if col not in existing_cols:
+                conn.execute(
+                    text(
+                        f"ALTER TABLE b04_task_ext ADD COLUMN `{col}` "
+                        "VARCHAR(255) NULL COMMENT '模板扩展字段'"
+                    )
+                )
+                if d.get("ext_type") == "enum":
+                    conn.execute(
+                        text(f"ALTER TABLE b04_task_ext ADD INDEX `idx_{col}` (`{col}`)")
+                    )
+        # 删除多余扩展列（开发态清空重建，决策①）
+        for col in existing_cols:
+            if _EXT_COL_RE.match(col) and col not in target_cols:
+                conn.execute(text(f"ALTER TABLE b04_task_ext DROP COLUMN `{col}`"))
 
 
 def init_models():

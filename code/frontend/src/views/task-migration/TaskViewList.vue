@@ -1,19 +1,19 @@
 <template>
-  <!-- 任务台账清单：空间内独立的台账列表入口（需求 R1 / D1；场景由空间头切换器维护） -->
+  <!-- 任务视图清单：空间内独立的视图列表入口（需求 R1 / D1；场景由空间头切换器维护） -->
   <div class="ledger-page">
     <el-card shadow="never">
       <template #header>
         <div class="page-head">
           <span class="page-title">
-            任务台账
+            任务视图
             <span v-if="scenario" class="page-scenario">{{ scenario.name }}</span>
           </span>
-          <el-button type="primary" :disabled="!scenarioId" @click="openCreate">新建台账</el-button>
+          <el-button type="primary" :disabled="!scenarioId" @click="openCreate">新建视图</el-button>
         </div>
       </template>
 
       <el-table v-loading="loading" :data="savedViews" border stripe style="margin-top: 12px">
-        <el-table-column prop="name" label="台账名称" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="name" label="视图名称" min-width="160" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.description || '—' }}</template>
         </el-table-column>
@@ -36,7 +36,7 @@
             <el-button link type="danger" @click="remove(row as SavedViewOut)">删除</el-button>
           </template>
         </el-table-column>
-        <template #empty><span class="muted">当前场景暂无台账，可在任务列表勾选任务或保存筛选条件创建</span></template>
+        <template #empty><span class="muted">当前场景暂无视图，可在任务列表勾选任务或保存筛选条件创建</span></template>
       </el-table>
 
       <el-empty v-if="!scenarioId" description="请先在空间头部选择或创建迁移场景" />
@@ -101,17 +101,17 @@ function openEdit(row: SavedViewOut) {
 
 function openView(row: SavedViewOut) {
   router.push({
-    name: 'space-saved-view',
+    name: 'space-custom-view',
     params: { spaceId: spaceId.value, viewId: row.id },
   })
 }
 
 async function remove(row: SavedViewOut) {
-  await ElMessageBox.confirm(`删除台账「${row.name}」仅移除该视图（不影响原任务），确认删除？`, '删除台账', {
+  await ElMessageBox.confirm(`删除视图「${row.name}」仅移除该视图（不影响原任务），确认删除？`, '删除视图', {
     type: 'warning',
   })
   await deleteSavedView(spaceId.value, row.id)
-  ElMessage.success('台账已删除')
+  ElMessage.success('视图已删除')
   await loadSavedViews()
 }
 
@@ -121,7 +121,7 @@ function onSaved() {
   loadSavedViews()
 }
 
-/** 场景切换（空间头切换器）→ 重载台账列表 */
+/** 场景切换（空间头切换器）→ 重载视图列表 */
 watch(
   () => scenarioStore.b04,
   () => {

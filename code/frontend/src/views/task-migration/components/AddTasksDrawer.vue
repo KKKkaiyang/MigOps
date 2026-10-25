@@ -1,5 +1,5 @@
 <template>
-  <!-- 补充任务抽屉（交互评审 I4）：在台账详情页内嵌完成，不离开当前页面 -->
+  <!-- 补充任务抽屉（交互评审 I4）：在视图详情页内嵌完成，不离开当前页面 -->
   <el-drawer
     v-model="visible"
     :title="`补充任务 · ${viewName}`"
@@ -8,8 +8,8 @@
   >
     <div class="add-tasks">
       <div class="drawer-note">
-        默认展示当前场景中<b>尚未加入本台账</b>的任务；重复加入会自动去重。
-        <span v-if="excludeIncomplete" class="warn">台账成员较多，未能完整预排除，请自行勾选。</span>
+        默认展示当前场景中<b>尚未加入本视图</b>的任务；重复加入会自动去重。
+        <span v-if="excludeIncomplete" class="warn">视图成员较多，未能完整预排除，请自行勾选。</span>
       </div>
 
       <TaskFilterBar
@@ -33,20 +33,22 @@
           <template #default="{ row }">
             <div class="task-cell">
               <span class="mono task-name">{{ row.task_name }}</span>
-              <span v-if="row.script_name" class="task-script mono">{{ row.script_name }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="workflow_name" label="工作流" width="120" />
-        <el-table-column prop="owner" label="Owner" width="80" />
-        <el-table-column label="迁移状态" width="130">
+        <el-table-column label="工作流" prop="workflow_name" width="120" />
+        <el-table-column label="迁移负责人" prop="migration_owner" width="110" />
+        <el-table-column label="迁移状态" width="140">
           <template #default="{ row }">
-            <TaskStatusCell :status="row.migration_status" />
+            <TaskStatusCell
+              dimension="migration_status"
+              :value="row.migration_status"
+            />
           </template>
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <el-tag v-if="inLedger(row.id)" size="small" type="info">已在台账</el-tag>
+            <el-tag v-if="inLedger(row.id)" size="small" type="info">已在视图</el-tag>
           </template>
         </el-table-column>
         <template #empty><span class="muted">暂无匹配任务</span></template>
@@ -68,7 +70,7 @@
         <div class="footer-actions">
           <el-button @click="visible = false">取消</el-button>
           <el-button type="primary" :loading="submitting" :disabled="!selection.length" @click="submit">
-            加入台账
+            加入视图
           </el-button>
         </div>
       </div>
@@ -77,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import TaskFilterBar from './TaskFilterBar.vue'
 import TaskStatusCell from './TaskStatusCell.vue'
@@ -113,29 +115,20 @@ const pageSize = ref(20)
 const loading = ref(false)
 const selection = ref<TaskOut[]>([])
 
-/** 已在台账内的任务 ID（用于预排除；超过单页上限时放弃完整排除） */
 const memberIds = ref<Set<number>>(new Set())
 const excludeIncomplete = ref(false)
 
-interface TaskFilters {
-  keyword: string
-  workflow_name: string
-  migration_status: string
-  schedule_status: string
-  check_status: string
-  owner: string
-  tag_ids: number[]
-  tag_match: string
-}
-
-const filters = ref<TaskFilters>({
+const filters = reactive<Record<string, any>>({
   keyword: '',
   workflow_name: '',
+  project_name: '',
+  migration_owner: '',
+  active_status: '',
   migration_status: '',
-  schedule_status: '',
+  dualrun_status: '',
   check_status: '',
-  owner: '',
-  tag_ids: [],
+  acceptance_status: '',
+  tag_ids: [] as number[],
   tag_match: 'all',
 })
 
@@ -150,15 +143,16 @@ function isSelectable(row: TaskOut): boolean {
 }
 
 function buildFilters(): Record<string, unknown> {
-  const f = filters.value
+  const f = filters
   const out: Record<string, unknown> = {}
   if (f.keyword) out.keyword = f.keyword
   if (f.workflow_name) out.workflow_name = f.workflow_name
-  if (f.migration_status) out.migration_status = f.migration_status
-  if (f.schedule_status) out.schedule_status = f.schedule_status
-  if (f.check_status) out.check_status = f.check_status
-  if (f.owner) out.owner = f.owner
-  if (f.tag_ids.length) out.tag_ids = f.tag_ids
+  if (f.project_name) out.project_name = f.project_name
+  if (f.migration_owner) out.migration_owner = f.migration_owner
+  for (const k of ['active_status', 'migration_status', 'dualrun_status', 'check_status', 'acceptance_status']) {
+    if (f[k]) out[k] = f[k]
+  }
+  if (Array.isArray(f.tag_ids) && f.tag_ids.length) out.tag_ids = f.tag_ids
   if (f.tag_match !== 'all') out.tag_match = f.tag_match
   return out
 }
@@ -178,13 +172,7 @@ async function loadMembers() {
 async function load() {
   loading.value = true
   try {
-    const data = await listTasks(
-      props.spaceId,
-      props.scenarioId,
-      page.value,
-      pageSize.value,
-      buildFilters()
-    )
+    const data = await listTasks(props.spaceId, props.scenarioId, page.value, pageSize.value, buildFilters())
     list.value = data.list
     total.value = data.total
   } finally {
@@ -193,7 +181,7 @@ async function load() {
 }
 
 function onFilterUpdate(payload: { key: string; value: string | number[] }) {
-  ;(filters.value as Record<string, string | number[]>)[payload.key] = payload.value
+  filters[payload.key] = payload.value
 }
 
 function search() {
@@ -202,16 +190,19 @@ function search() {
 }
 
 function resetFilters() {
-  filters.value = {
+  Object.assign(filters, {
     keyword: '',
     workflow_name: '',
+    project_name: '',
+    migration_owner: '',
+    active_status: '',
     migration_status: '',
-    schedule_status: '',
+    dualrun_status: '',
     check_status: '',
-    owner: '',
+    acceptance_status: '',
     tag_ids: [],
     tag_match: 'all',
-  }
+  })
   page.value = 1
   load()
 }
@@ -226,11 +217,7 @@ async function submit() {
   submitting.value = true
   try {
     const count = selection.value.length
-    await addSavedViewMembers(
-      props.spaceId,
-      props.viewId,
-      selection.value.map((t) => t.id)
-    )
+    await addSavedViewMembers(props.spaceId, props.viewId, selection.value.map((t) => t.id))
     ElMessage.success(`已加入 ${count} 个任务`)
     visible.value = false
     emit('added', count)
@@ -274,11 +261,6 @@ watch(
 .task-name {
   font-size: 13px;
   font-weight: 600;
-}
-
-.task-script {
-  font-size: 11px;
-  color: var(--color-text-muted);
 }
 
 .mono {

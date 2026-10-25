@@ -1,70 +1,253 @@
-"""b04 任务迁移管理服务：场景、任务台账、排查备注、自定义台账与导入导出。"""
+"""b04 任务迁移管理服务：场景、任务台账（基础表+扩展表）、迁移模板、排查备注、自定义台账与导入导出。
 
+依据《任务迁移-任务台账数据模型重构需求》V1.0（D1~D7）：
+- 任务主体 15 业务字段 + 5 维独立状态（替代旧状态机）；
+- 空间级迁移模板驱动字段选择 / 必填 / 排序 / 列表展示 / 导入；
+- 扩展字段按空间模板动态加列 f_1…n（b04_task_ext）。
+"""
+
+import re
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import UploadFile
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BizError, NotFoundError
+from app.database import ensure_task_ext_columns
 from app.models.b04_task_migration import (
-    CHECK_STATUSES,
     NOTE_KIND_CHECK_RESULT,
     NOTE_KIND_TROUBLESHOOT,
-    SCHEDULE_STATUSES,
-    TASK_STATUSES,
-    TASK_STATUS_TRANSITIONS,
+    CHECK_RESULT_NONE,
+    CHECK_RESULTS,
+    B04MigrationTemplate,
     B04SavedView,
     B04SavedViewMember,
     B04Scenario,
     B04Task,
+    B04TaskExt,
     B04TaskNote,
 )
-from app.models.b06_tag import B06Tag, B06TaskTag
+from app.models.b06_tag import B06TaskTag
 from app.services import b06_tag as tag_svc
 from app.schemas.b04_task_migration import (
-    NoteCreate,
-    SavedViewCreate,
-    SavedViewUpdate,
+    NOTE_KINDS,
+    STATUS_DIMENSIONS,
     ScenarioCreate,
     ScenarioUpdate,
+    SavedViewCreate,
+    SavedViewUpdate,
     TaskUpdate,
 )
 from app.utils import excel as xl
 
-# 任务导入模板列
-TASK_IMPORT_HEADERS = [
-    "工作流名称",
-    "任务名称",
-    "脚本名称",
-    "Owner",
-    "迁移状态",
-    "调度状态",
-    "数据校验状态",
-    "输入表",
-    "输出表",
+# 扩展列名白名单：仅允许 f_<数字>，防止动态 DDL/SQL 注入（需求 §9.4）
+_EXT_COL_RE = re.compile(r"^f_[0-9]+$")
+
+# 任务导入单文件行数上限（b04 专用，5 万行；不影响 b03 的 xl.MAX_IMPORT_ROWS=5000）
+MAX_TASK_IMPORT_ROWS = 50000
+
+# 导入行级必填字段（B04-08：仅项目名称、任务名称不允许为空，其余字段可留空落 NULL；
+# 模板中的「必选」配置保留，仅导入校验放宽）
+IMPORT_REQUIRED_FIELDS = {"project_name", "task_name"}
+
+# ── 基础表字段模板元数据：(field_key, 中文名, 是否锁定必填, 列表展示默认值) ──
+# check_result（数据校验结果）为模板必选字段，但列表展示默认关闭（需求：列表显示默认：否），
+# 其值由数据校验结果导入按血缘输出表自动刷新，见《数据校验-数据校验结果导入与刷新需求》。
+BASE_TEMPLATE_FIELDS = [
+    ("project_name", "项目名称", True, True),
+    ("task_name", "任务名称", True, True),
+    ("migration_owner", "迁移负责人", True, True),
+    ("active_status", "任务活跃状态", True, True),
+    ("migration_status", "迁移状态", True, True),
+    ("dualrun_status", "双跑调度状态", True, True),
+    ("check_status", "数据校验状态", True, True),
+    ("acceptance_status", "客户验收状态", True, True),
+    ("workflow_name", "工作流名称", False, True),
+    ("env", "归属环境", False, True),
+    ("business", "归属业务", False, True),
+    ("task_type", "任务类型", False, True),
+    ("remark", "备注信息", False, True),
+    ("check_result", "数据校验结果", True, False),
 ]
-# 任务导出列
-TASK_EXPORT_HEADERS = [
-    "工作流名称",
-    "任务名称",
-    "脚本名称",
-    "Owner",
-    "任务URI",
-    "迁移状态",
-    "调度状态",
-    "数据校验状态",
-    "输入表",
-    "输出表",
-    "最新排查备注",
-    "更新时间",
-]
+_BASE_FIELD_KEYS = {k for k, _, _, _ in BASE_TEMPLATE_FIELDS}
+_REQUIRED_BASE_FIELDS = {k for k, _, req, _ in BASE_TEMPLATE_FIELDS if req}
 
 
-def build_task_uri(space_name: str, task_name: str, workflow_name: str) -> str:
-    """任务URI：项目名称://任务名称@工作流名称（场景内唯一）。"""
-    return f"{space_name}://{task_name}@{workflow_name}"
+def build_task_uri(project_name: str, task_name: str, workflow_name: str) -> str:
+    """任务URI：project_name://task_name@workflow_name（场景内唯一）。"""
+    return f"{project_name}://{task_name}@{workflow_name}"
+
+
+# ── 空间级迁移模板 ──
+def build_default_template_config() -> dict:
+    """默认模板：14 基础字段全选、9 项必填锁定、顺序 1..14、无扩展字段。
+
+    其中「数据校验结果」为必选字段但列表展示默认关闭（需求：列表显示默认：否）。
+    """
+    fields = []
+    for i, (key, label, req, in_list) in enumerate(BASE_TEMPLATE_FIELDS, start=1):
+        fields.append(
+            {
+                "field_key": key,
+                "field_label": label,
+                "field_source": "base",
+                "is_required": req,
+                "display_in_list": in_list,
+                "order": i,
+                "ext_type": None,
+                "enum_options": None,
+            }
+        )
+    return {"fields": fields}
+
+
+def get_template(sdb: Session, space_id: int) -> Optional[B04MigrationTemplate]:
+    return (
+        sdb.query(B04MigrationTemplate)
+        .filter(
+            B04MigrationTemplate.space_id == space_id,
+            B04MigrationTemplate.deleted_at.is_(None),
+        )
+        .first()
+    )
+
+
+def seed_default_template(sdb: Session, space_id: int, operator: str) -> B04MigrationTemplate:
+    """空间初始化时若无模板，注入默认模板（保证存量/新空间均可导入，决策③）。
+
+    存量模板升级：早前版本模板缺少「数据校验结果」等后增必选字段时，按默认定义补齐，
+    避免导入因「模板必填字段缺失」失败（见《数据校验-数据校验结果导入与刷新需求》）。
+    """
+    existing = get_template(sdb, space_id)
+    if existing:
+        _upgrade_template_fields(sdb, existing, operator)
+        return existing
+    obj = B04MigrationTemplate(
+        space_id=space_id,
+        name="默认迁移模板",
+        config_json=build_default_template_config(),
+        created_by=operator,
+    )
+    sdb.add(obj)
+    sdb.commit()
+    sdb.refresh(obj)
+    return obj
+
+
+def _upgrade_template_fields(
+    sdb: Session, template: B04MigrationTemplate, operator: str
+) -> bool:
+    """存量模板补齐后增的基础字段（幂等）：缺失字段按 BASE_TEMPLATE_FIELDS 默认定义追加。"""
+    config = template.config_json or {}
+    fields = config.get("fields") or []
+    present = {f.get("field_key") for f in fields}
+    max_order = max((f.get("order", 0) for f in fields), default=0)
+    added = False
+    for key, label, req, in_list in BASE_TEMPLATE_FIELDS:
+        if key in present:
+            continue
+        max_order += 1
+        fields.append(
+            {
+                "field_key": key,
+                "field_label": label,
+                "field_source": "base",
+                "is_required": req,
+                "display_in_list": in_list,
+                "order": max_order,
+                "ext_type": None,
+                "enum_options": None,
+            }
+        )
+        added = True
+    if added:
+        template.config_json = {"fields": fields}
+        template.updated_by = operator
+        template.updated_at = datetime.now()
+        sdb.commit()
+    return added
+
+
+def _ordered_ext_fields(config: dict) -> List[dict]:
+    ext = [f for f in config.get("fields", []) if f.get("field_source") == "extension"]
+    ext.sort(key=lambda f: f.get("order", 0))
+    return ext
+
+
+def upsert_template(
+    sdb: Session, space_id: int, payload, operator: str
+) -> B04MigrationTemplate:
+    """保存/更新空间级迁移模板，并按扩展字段定义动态加列 f_n。"""
+    config = payload.config_json
+    ordered_ext = _ordered_ext_fields(config)
+    ext_defs = [
+        {"name": f"f_{i + 1}", "ext_type": f.get("ext_type") or "string"}
+        for i, f in enumerate(ordered_ext)
+    ]
+    # 动态加列 / 删列（开发态清空重建多余列）
+    engine = sdb.get_bind()
+    ensure_task_ext_columns(engine, ext_defs)
+
+    obj = get_template(sdb, space_id)
+    if obj:
+        obj.name = payload.name
+        obj.config_json = config
+        obj.updated_by = operator
+        obj.updated_at = datetime.now()
+    else:
+        obj = B04MigrationTemplate(
+            space_id=space_id,
+            name=payload.name,
+            config_json=config,
+            created_by=operator,
+        )
+        sdb.add(obj)
+    sdb.commit()
+    sdb.refresh(obj)
+    return obj
+
+
+# ── 扩展字段读写（动态列，白名单防注入） ──
+def get_ext_map(sdb: Session, task_ids: List[int]) -> Dict[int, Dict[str, str]]:
+    """批量读取任务扩展字段，返回 {task_id: {f_n: value}}。"""
+    if not task_ids:
+        return {}
+    rows = (
+        sdb.execute(
+            text("SELECT * FROM b04_task_ext WHERE task_id IN :ids"),
+            {"ids": tuple(task_ids)},
+        )
+        .mappings()
+        .all()
+    )
+    out: Dict[int, Dict[str, str]] = {}
+    for r in rows:
+        d = dict(r)
+        tid = d.pop("task_id", None)
+        out[tid] = {k: v for k, v in d.items() if _EXT_COL_RE.match(k)}
+    return out
+
+
+def _upsert_ext(sdb: Session, task_id: int, ext_values: Dict[str, Optional[str]]) -> None:
+    cols = {c: v for c, v in ext_values.items() if _EXT_COL_RE.match(c)}
+    if not cols:
+        return
+    exists = (
+        sdb.execute(text("SELECT 1 FROM b04_task_ext WHERE task_id=:t"), {"t": task_id}).first()
+    )
+    if exists:
+        sets = ", ".join(f"`{c}`=:c_{c}" for c in cols)
+        params = {"t": task_id, **{f"c_{c}": cols[c] for c in cols}}
+        sdb.execute(text(f"UPDATE b04_task_ext SET {sets} WHERE task_id=:t"), params)
+    else:
+        names = ", ".join(f"`{c}`" for c in cols)
+        ph = ", ".join(f":c_{c}" for c in cols)
+        params = {"t": task_id, **{f"c_{c}": cols[c] for c in cols}}
+        sdb.execute(
+            text(f"INSERT INTO b04_task_ext (task_id, {names}) VALUES (:t, {ph})"), params
+        )
 
 
 # ── 场景 ──
@@ -193,12 +376,16 @@ def _task_query(
     scenario_id: int,
     keyword: Optional[str] = None,
     workflow_name: Optional[str] = None,
+    project_name: Optional[str] = None,
+    migration_owner: Optional[str] = None,
+    active_status: Optional[str] = None,
     migration_status: Optional[str] = None,
-    schedule_status: Optional[str] = None,
+    dualrun_status: Optional[str] = None,
     check_status: Optional[str] = None,
-    owner: Optional[str] = None,
+    acceptance_status: Optional[str] = None,
     tag_ids: Optional[List[int]] = None,
     tag_match: str = "all",
+    ext_filters: Optional[Dict[str, str]] = None,
 ):
     q = sdb.query(B04Task).filter(
         B04Task.space_id == space_id,
@@ -210,19 +397,37 @@ def _task_query(
         q = q.filter(or_(B04Task.task_name.like(like), B04Task.task_uri.like(like)))
     if workflow_name:
         q = q.filter(B04Task.workflow_name == workflow_name)
+    if project_name:
+        q = q.filter(B04Task.project_name == project_name)
+    if migration_owner:
+        q = q.filter(B04Task.migration_owner == migration_owner)
+    if active_status:
+        q = q.filter(B04Task.active_status == active_status)
     if migration_status:
         q = q.filter(B04Task.migration_status == migration_status)
-    if schedule_status:
-        q = q.filter(B04Task.schedule_status == schedule_status)
+    if dualrun_status:
+        q = q.filter(B04Task.dualrun_status == dualrun_status)
     if check_status:
         q = q.filter(B04Task.check_status == check_status)
-    if owner:
-        q = q.filter(B04Task.owner == owner)
+    if acceptance_status:
+        q = q.filter(B04Task.acceptance_status == acceptance_status)
+    # 扩展字段筛选（枚举类已建索引）：键必须经白名单
+    ext_params = {}
+    if ext_filters:
+        for col, val in ext_filters.items():
+            if not _EXT_COL_RE.match(col) or val is None:
+                continue
+            q = q.filter(
+                text(
+                    f"EXISTS(SELECT 1 FROM b04_task_ext e WHERE e.task_id=b04_task.id "
+                    f"AND e.`{col}`=:e_{col})"
+                )
+            )
+            ext_params[f"e_{col}"] = val
+        if ext_params:
+            q = q.params(**ext_params)
     if tag_ids:
         if tag_match == "all":
-            # 任务需包含全部所选标签。
-            # 注意：必须用 scalar_subquery() 包裹计数子查询，否则 Query == int 会在
-            # Python 层求值为 False，编译成 WHERE false 导致查不到数据（已用单测复现）。
             tag_count = (
                 sdb.query(func.count(B06TaskTag.id))
                 .filter(
@@ -235,7 +440,6 @@ def _task_query(
             )
             q = q.filter(tag_count == len(tag_ids))
         else:
-            # 满足任一标签
             subq = sdb.query(B06TaskTag.task_id).filter(
                 B06TaskTag.space_id == space_id,
                 B06TaskTag.tag_id.in_(tag_ids),
@@ -253,12 +457,16 @@ def list_tasks(
     page_size: int,
     keyword: Optional[str] = None,
     workflow_name: Optional[str] = None,
+    project_name: Optional[str] = None,
+    migration_owner: Optional[str] = None,
+    active_status: Optional[str] = None,
     migration_status: Optional[str] = None,
-    schedule_status: Optional[str] = None,
+    dualrun_status: Optional[str] = None,
     check_status: Optional[str] = None,
-    owner: Optional[str] = None,
+    acceptance_status: Optional[str] = None,
     tag_ids: Optional[List[int]] = None,
     tag_match: str = "all",
+    ext_filters: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[B04Task], int]:
     get_scenario(sdb, space_id, scenario_id)
     q = _task_query(
@@ -267,12 +475,16 @@ def list_tasks(
         scenario_id,
         keyword,
         workflow_name,
+        project_name,
+        migration_owner,
+        active_status,
         migration_status,
-        schedule_status,
+        dualrun_status,
         check_status,
-        owner,
+        acceptance_status,
         tag_ids,
         tag_match,
+        ext_filters,
     )
     total = q.count()
     rows = (
@@ -299,34 +511,56 @@ def get_task(sdb: Session, space_id: int, task_id: int) -> B04Task:
     return obj
 
 
+def get_task_by_key(sdb: Session, space_id: int, project_name: str, task_name: str) -> B04Task:
+    """按（项目名称 + 任务名称）定位任务（D5：血缘任务名直达任务详情）。
+
+    任务名在同一项目空间内唯一；未找到返回 None（由路由层转 404/业务提示）。
+    """
+    obj = (
+        sdb.query(B04Task)
+        .filter(
+            B04Task.space_id == space_id,
+            B04Task.project_name == project_name,
+            B04Task.task_name == task_name,
+            B04Task.deleted_at.is_(None),
+        )
+        .first()
+    )
+    return obj
+
+
 def update_task(
     sdb: Session, space_id: int, task_id: int, payload: TaskUpdate, operator: str
 ) -> B04Task:
     obj = get_task(sdb, space_id, task_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    ext_values = data.pop("ext", None)
+    for field, value in data.items():
         setattr(obj, field, value)
     obj.updated_by = operator
     obj.updated_at = datetime.now()
+    if ext_values:
+        _upsert_ext(sdb, task_id, ext_values)
     sdb.commit()
     sdb.refresh(obj)
     return obj
 
 
-def _validate_transition(current: str, target: str) -> None:
-    if target not in TASK_STATUSES:
-        raise BizError(f"非法的迁移状态: {target}")
-    allowed = TASK_STATUS_TRANSITIONS.get(current, set())
-    if target not in allowed:
-        allowed_text = "、".join(sorted(allowed)) or "无（终态）"
-        raise BizError(f"迁移状态不能从「{current}」变更为「{target}」，可流转至: {allowed_text}")
-
-
 def update_task_status(
-    sdb: Session, space_id: int, task_id: int, status: str, operator: str
+    sdb: Session, space_id: int, task_id: int, payload, operator: str
 ) -> B04Task:
+    """5 维状态独立更新：仅更新 payload 中提供的维度（互不约束，D1）。"""
     obj = get_task(sdb, space_id, task_id)
-    _validate_transition(obj.migration_status, status)
-    obj.migration_status = status
+    data = payload.model_dump(exclude_unset=True)
+    applied = False
+    for dim, value in data.items():
+        if value is not None and dim in STATUS_DIMENSIONS:
+            if value not in STATUS_DIMENSIONS[dim]:
+                raise BizError(f"非法的{dim}取值: {value}")
+            setattr(obj, dim, value)
+            applied = True
+    if not applied:
+        raise BizError("未提供任何有效的状态维度")
     obj.updated_by = operator
     obj.updated_at = datetime.now()
     sdb.commit()
@@ -335,11 +569,18 @@ def update_task_status(
 
 
 def batch_update_task_status(
-    sdb: Session, space_id: int, ids: List[int], status: str, operator: str
+    sdb: Session,
+    space_id: int,
+    ids: List[int],
+    dimension: str,
+    value: str,
+    operator: str,
 ) -> int:
-    """批量状态流转：先全部校验，任一非法则整体拒绝并提示。"""
-    if status not in TASK_STATUSES:
-        raise BizError(f"非法的迁移状态: {status}")
+    """批量更新某一维度的状态。"""
+    if dimension not in STATUS_DIMENSIONS:
+        raise BizError(f"非法的状态维度: {dimension}")
+    if value not in STATUS_DIMENSIONS[dimension]:
+        raise BizError(f"维度 {dimension} 的非法取值: {value}")
     rows = (
         sdb.query(B04Task)
         .filter(
@@ -351,139 +592,187 @@ def batch_update_task_status(
     )
     if not rows:
         raise NotFoundError("未找到可更新的任务")
-    invalid = [
-        f"{r.task_name}（{r.migration_status}）"
-        for r in rows
-        if status not in TASK_STATUS_TRANSITIONS.get(r.migration_status, set())
-    ]
-    if invalid:
-        raise BizError(
-            f"以下任务不能流转为「{status}」: {'、'.join(invalid[:5])}"
-            + (" 等" if len(invalid) > 5 else "")
-        )
     now = datetime.now()
     for r in rows:
-        r.migration_status = status
+        setattr(r, dimension, value)
         r.updated_by = operator
         r.updated_at = now
     sdb.commit()
     return len(rows)
 
 
-# ── 导入 / 导出 ──
+# ── 导入 / 导出（模板驱动，D7） ──
 def import_tasks(
     sdb: Session,
     space_id: int,
     scenario_id: int,
-    space_name: str,
     file: UploadFile,
     operator: str,
     mode: str = "overwrite",
 ) -> dict:
-    """导入任务台账。
+    """按空间模板导入任务台账（强制先配模板，D7）。
 
-    mode=overwrite：按 task_uri 覆盖更新已存在行的导入字段；
-    mode=incremental：跳过已存在行（skipped 计数）。
+    mode=overwrite：按 task_uri 覆盖更新已存在行；
+    mode=incremental：跳过已存在行。
+    B04-08：行级仅强制 项目名称/任务名称 非空，其余字段留空落 NULL（模板必选配置保留）。
     """
     get_scenario(sdb, space_id, scenario_id)
     if mode not in ("overwrite", "incremental"):
         raise BizError("非法的导入模式")
+    template = get_template(sdb, space_id)
+    if not template:
+        raise BizError("请先在空间内配置迁移模板后再导入")
+    config = template.config_json
+    fields = config.get("fields", [])
+    if not fields:
+        raise BizError("迁移模板未配置任何字段")
+
+    ordered_ext = _ordered_ext_fields(config)
+    ext_label_to_col = {f["field_label"]: f"f_{i + 1}" for i, f in enumerate(ordered_ext)}
+
     xl.check_import_file(file.filename)
     content = file.file.read()
     headers, rows, line_nos = xl.read_tabular(content, file.filename or "")
-    if len(rows) > xl.MAX_IMPORT_ROWS:
-        raise BizError(f"单次导入不得超过 {xl.MAX_IMPORT_ROWS} 行")
-    missing = [h for h in ("工作流名称", "任务名称") if h not in headers]
-    if missing:
-        raise BizError(f"导入文件缺少必需列: {', '.join(missing)}")
+    if len(rows) > MAX_TASK_IMPORT_ROWS:
+        raise BizError(f"单次导入不得超过 {MAX_TASK_IMPORT_ROWS} 行")
+
+    # 必填字段须出现在 Excel 表头中（模板下载生成的文件必然满足）
+    selected_labels = {f["field_label"] for f in fields}
+    for req_field in (f for f in fields if f.get("is_required")):
+        if req_field["field_label"] not in selected_labels:
+            raise BizError(f"模板必填字段缺失: {req_field['field_label']}")
 
     inserted = updated = skipped = 0
     errors = []
+    enum_changes = False  # 是否因 D6 动态收集枚举新增值而需更新模板
+    now = datetime.now()
+
+    # 预取场景内已有任务（task_uri → task），避免 5 万行逐行 SELECT
+    existing_tasks: Dict[str, B04Task] = {
+        t.task_uri: t
+        for t in sdb.query(B04Task)
+        .filter(
+            B04Task.scenario_id == scenario_id,
+            B04Task.deleted_at.is_(None),
+        )
+        .all()
+    }
+    # 文件内新建任务（task_uri → (base_values, ext_values)），重复行后者覆盖前者
+    new_rows: Dict[str, Tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]] = {}
+
     for row, line_no in zip(rows, line_nos):
         try:
-            workflow = xl._to_str(row.get("工作流名称"))
-            task_name = xl._to_str(row.get("任务名称"))
-            if not workflow or not task_name:
-                raise ValueError("工作流名称/任务名称不能为空")
-            migration_status = xl._to_str(row.get("迁移状态")) or "未开始"
-            schedule_status = xl._to_str(row.get("调度状态")) or "未提交"
-            check_status = xl._to_str(row.get("数据校验状态")) or "未校验"
-            if migration_status not in TASK_STATUSES:
-                raise ValueError(f"非法的迁移状态: {migration_status}")
-            if schedule_status not in SCHEDULE_STATUSES:
-                raise ValueError(f"非法的调度状态: {schedule_status}")
-            if check_status not in CHECK_STATUSES:
-                raise ValueError(f"非法的数据校验状态: {check_status}")
-            uri = build_task_uri(space_name, task_name, workflow)
-            values = {
-                "script_name": xl._to_str(row.get("脚本名称")) or None,
-                "owner": xl._to_str(row.get("Owner")) or None,
-                "migration_status": migration_status,
-                "schedule_status": schedule_status,
-                "check_status": check_status,
-                "input_tables": xl._to_str(row.get("输入表")) or None,
-                "output_tables": xl._to_str(row.get("输出表")) or None,
-            }
-            existing = (
-                sdb.query(B04Task)
-                .filter(
-                    B04Task.scenario_id == scenario_id,
-                    B04Task.task_uri == uri,
-                    B04Task.deleted_at.is_(None),
-                )
-                .first()
-            )
-            if existing:
+            base_values: Dict[str, Optional[str]] = {}
+            ext_values: Dict[str, Optional[str]] = {}
+            for f in fields:
+                label = f["field_label"]
+                raw = xl._to_str(row.get(label))
+                # B04-08：行级仅强制 项目名称/任务名称 非空，其余字段（含模板必选项）允许留空
+                if f["field_key"] in IMPORT_REQUIRED_FIELDS and not raw:
+                    raise ValueError(f"必填字段[{label}]缺失")
+                if f["field_source"] == "extension":
+                    col = ext_label_to_col[label]
+                    ext_values[col] = raw or None
+                    # D6：枚举类扩展字段首次导入动态收集新值
+                    if f.get("ext_type") == "enum" and raw:
+                        opts = f.get("enum_options") or []
+                        if not any(o.get("code") == raw for o in opts):
+                            opts.append({"code": raw, "label": raw})
+                            f["enum_options"] = opts
+                            enum_changes = True
+                else:
+                    key = f["field_key"]
+                    if key in STATUS_DIMENSIONS:
+                        if raw:
+                            if raw not in STATUS_DIMENSIONS[key]:
+                                raise ValueError(f"[{label}]非法取值: {raw}")
+                            base_values[key] = raw
+                        else:
+                            base_values[key] = None
+                    elif key == "check_result":
+                        # 数据校验结果：通过/不通过/无校验结果；留空落 NULL（B04-08 导入放宽）
+                        if raw and raw not in CHECK_RESULTS:
+                            raise ValueError(f"[{label}]非法取值: {raw}")
+                        base_values[key] = raw or None
+                    else:
+                        base_values[key] = raw or None
+
+            # 互填规则（§3.3）：工作流名称/任务名称不能全空
+            wn = base_values.get("workflow_name") or ""
+            tn = base_values.get("task_name") or ""
+            if not wn and not tn:
+                raise ValueError("工作流名称与任务名称不能都为空")
+            if not tn:
+                base_values["task_name"] = wn
+            if not wn:
+                base_values["workflow_name"] = tn
+            pn = base_values.get("project_name") or "default"
+            uri = build_task_uri(pn, base_values["task_name"], base_values["workflow_name"])
+
+            existing = existing_tasks.get(uri)
+            if existing is not None:
                 if mode == "incremental":
                     skipped += 1
                     continue
-                for field, value in values.items():
+                for field, value in base_values.items():
                     setattr(existing, field, value)
                 existing.updated_by = operator
-                existing.updated_at = datetime.now()
+                existing.updated_at = now
+                _upsert_ext(sdb, existing.id, ext_values)
                 updated += 1
             else:
-                sdb.add(
-                    B04Task(
-                        space_id=space_id,
-                        scenario_id=scenario_id,
-                        workflow_name=workflow,
-                        task_name=task_name,
-                        task_uri=uri,
-                        created_by=operator,
-                        **values,
-                    )
-                )
-                inserted += 1
+                # 文件内同一 task_uri 重复行：后者覆盖前者（与 b05 导入去重口径一致）
+                new_rows[uri] = (base_values, ext_values)
         except ValueError as exc:
             errors.append({"row": line_no, "message": str(exc)})
+
+    # 批量插入新任务（一次 add_all + flush），再按 ID 补扩展字段
+    new_objs: List[Tuple[B04Task, Dict[str, Optional[str]]]] = []
+    for uri, (base_values, ext_values) in new_rows.items():
+        obj = B04Task(
+            space_id=space_id,
+            scenario_id=scenario_id,
+            task_uri=uri,
+            created_by=operator,
+            **base_values,
+        )
+        sdb.add(obj)
+        new_objs.append((obj, ext_values))
+    if new_objs:
+        sdb.flush()
+        for obj, ext_values in new_objs:
+            _upsert_ext(sdb, obj.id, ext_values)
+            inserted += 1
+
+    # D6：若导入过程中收集到新的枚举值，回写模板
+    if enum_changes:
+        template.config_json = config
+        sdb.add(template) if template not in sdb.new else None
+        sdb.commit()
     sdb.commit()
     return {"inserted": inserted, "updated": updated, "skipped": skipped, "errors": errors}
 
 
-def _tasks_to_xlsx(rows: List[B04Task]) -> bytes:
-    data = [
-        [
-            r.workflow_name,
-            r.task_name,
-            r.script_name or "",
-            r.owner or "",
-            r.task_uri,
-            r.migration_status,
-            r.schedule_status,
-            r.check_status,
-            r.input_tables or "",
-            r.output_tables or "",
-            r.latest_note or "",
-            r.updated_at.strftime("%Y-%m-%d %H:%M:%S") if r.updated_at else "",
-        ]
-        for r in rows
-    ]
-    return xl.make_xlsx(
-        TASK_EXPORT_HEADERS,
-        data,
-        widths=[18, 24, 24, 10, 40, 14, 12, 12, 24, 24, 30, 20],
-    )
+def _build_export_xlsx(sdb: Session, rows: List[B04Task], config: dict) -> bytes:
+    """按模板字段导出 xlsx（含扩展字段，f_n 经模板映射中文名）。"""
+    fields = config.get("fields", [])
+    ordered_ext = _ordered_ext_fields(config)
+    ext_col_for_label = {f["field_label"]: f"f_{i + 1}" for i, f in enumerate(ordered_ext)}
+    headers = [f["field_label"] for f in fields]
+    ext_map = get_ext_map(sdb, [r.id for r in rows])
+    data = []
+    for r in rows:
+        row = []
+        for f in fields:
+            if f["field_source"] == "extension":
+                col = ext_col_for_label[f["field_label"]]
+                row.append(ext_map.get(r.id, {}).get(col) or "")
+            else:
+                val = getattr(r, f["field_key"], "")
+                row.append(val if val is not None else "")
+        data.append(row)
+    widths = [18] * len(headers)
+    return xl.make_xlsx(headers, data, widths)
 
 
 def export_tasks(
@@ -492,10 +781,13 @@ def export_tasks(
     scenario_id: int,
     keyword: Optional[str] = None,
     workflow_name: Optional[str] = None,
+    project_name: Optional[str] = None,
+    migration_owner: Optional[str] = None,
+    active_status: Optional[str] = None,
     migration_status: Optional[str] = None,
-    schedule_status: Optional[str] = None,
+    dualrun_status: Optional[str] = None,
     check_status: Optional[str] = None,
-    owner: Optional[str] = None,
+    acceptance_status: Optional[str] = None,
     tag_ids: Optional[List[int]] = None,
     tag_match: str = "all",
 ) -> bytes:
@@ -506,37 +798,56 @@ def export_tasks(
             scenario_id,
             keyword,
             workflow_name,
+            project_name,
+            migration_owner,
+            active_status,
             migration_status,
-            schedule_status,
+            dualrun_status,
             check_status,
-            owner,
+            acceptance_status,
             tag_ids,
             tag_match,
         )
         .order_by(B04Task.id.asc())
         .all()
     )
-    return _tasks_to_xlsx(rows)
+    template = get_template(sdb, space_id)
+    config = template.config_json if template else build_default_template_config()
+    return _build_export_xlsx(sdb, rows, config)
 
 
-def task_template() -> bytes:
-    return xl.make_xlsx(
-        TASK_IMPORT_HEADERS,
-        [
-            [
-                "etl_workflow",
-                "ods_order_sync",
-                "ods_order_sync.sql",
-                "张三",
-                "未开始",
-                "未提交",
-                "未校验",
-                "ods.ods_order_di",
-                "ods.ods_order_di",
-            ]
-        ],
-        widths=[18, 24, 24, 10, 14, 12, 12, 24, 24],
-    )
+def task_template_xlsx(sdb: Session, space_id: int) -> bytes:
+    """按空间模板生成导入 Excel（列由模板按 order 生成，D7）。"""
+    template = get_template(sdb, space_id)
+    if not template:
+        raise BizError("请先配置迁移模板后再下载导入模板")
+    config = template.config_json
+    fields = config.get("fields", [])
+    headers = [f["field_label"] for f in fields]
+    sample = []
+    for f in fields:
+        if f["field_source"] == "extension":
+            sample.append("")
+            continue
+        key = f["field_key"]
+        if key == "project_name":
+            sample.append("default")
+        elif key == "task_name":
+            sample.append("ods_order_sync")
+        elif key == "workflow_name":
+            sample.append("etl_workflow")
+        elif key == "env":
+            sample.append("生产")
+        elif key == "migration_owner":
+            sample.append("张三")
+        elif key in STATUS_DIMENSIONS:
+            sample.append(list(STATUS_DIMENSIONS[key])[0])
+        elif key == "check_result":
+            sample.append(CHECK_RESULT_NONE)
+        else:
+            sample.append("")
+    widths = [18] * len(headers)
+    return xl.make_xlsx(headers, [sample], widths)
 
 
 # ── 排查备注 ──
@@ -555,9 +866,9 @@ def list_notes(sdb: Session, space_id: int, task_id: int) -> List[B04TaskNote]:
 
 
 def create_note(
-    sdb: Session, space_id: int, task_id: int, payload: NoteCreate, operator: str
+    sdb: Session, space_id: int, task_id: int, payload, operator: str
 ) -> B04TaskNote:
-    task = get_task(sdb, space_id, task_id)
+    get_task(sdb, space_id, task_id)
     obj = B04TaskNote(
         space_id=space_id,
         task_id=task_id,
@@ -568,26 +879,23 @@ def create_note(
         created_by=operator,
     )
     sdb.add(obj)
-    # 冗余最新备注摘要到任务行（列表展示用）
-    summary = payload.problem_desc or payload.fix_plan or payload.cause_analysis or ""
-    task.latest_note = summary[:500] if summary else task.latest_note
-    task.updated_by = operator
-    task.updated_at = datetime.now()
+    # 备注不再冗余到 b04_task（latest_note 已移出基础表，D3）
     sdb.commit()
     sdb.refresh(obj)
     return obj
 
-# ── 标签管理 / 任务标签 ──
-# 标签主表与标签 CRUD、任务标签关联逻辑统一在 app.services.b06_tag 中实现（b06 标签管理模块）；
-# 本模块任务列表/台账仅调用 tag_svc 完成打标签与标签附加，不直接维护标签表。
+
 # ── 自定义台账 ──
 _ALLOWED_FILTER_KEYS = {
     "keyword",
     "workflow_name",
+    "project_name",
+    "migration_owner",
+    "active_status",
     "migration_status",
-    "schedule_status",
+    "dualrun_status",
     "check_status",
-    "owner",
+    "acceptance_status",
 }
 
 
@@ -601,10 +909,7 @@ def _clean_filter_config(config: dict) -> dict:
 
 
 def _snapshot_members(sdb: Session, space_id: int, view: B04SavedView, operator: str) -> None:
-    """固化台账：按当前筛选条件快照命中任务 ID 为成员。
-
-    成员表以 (view_id, task_id) 唯一约束，故复用/复活已逻辑删除的旧行，避免重复插入冲突。
-    """
+    """固化台账：按当前筛选条件快照命中任务 ID 为成员。"""
     filters = _clean_filter_config(view.filter_config or {})
     rows = _task_query(sdb, space_id, view.scenario_id, **filters).all()
     now = datetime.now()
@@ -644,10 +949,9 @@ def _rebuild_members(sdb: Session, space_id: int, view: B04SavedView, operator: 
 def _set_members_from_ids(
     sdb: Session, space_id: int, view: B04SavedView, task_ids: List[int], operator: str
 ) -> None:
-    """R3：按显式任务 ID 写入/复活固化成员（修正 _snapshot_members 的 task_id 索引笔误）。"""
+    """R3：按显式任务 ID 写入/复活固化成员。"""
     if not task_ids:
         return
-    # 仅保留归属当前 space/scenario 的合法任务，避免悬挂成员
     valid = {
         r.id
         for r in sdb.query(B04Task.id)
@@ -726,7 +1030,6 @@ def create_saved_view(
     ):
         raise BizError(f"台账名称已存在: {payload.name}")
 
-    # R3：勾选具体任务创建台账 → 强制 fixed，直接以所选任务 ID 落为成员（不走筛选快照）
     if payload.member_ids:
         obj = B04SavedView(
             space_id=space_id,
@@ -765,10 +1068,9 @@ def create_saved_view(
 def remove_members(
     sdb: Session, space_id: int, view_id: int, task_ids: List[int], operator: str
 ) -> B04SavedView:
-    """R4：从台账移除一个或多个任务 → 无论原为何种类型，均转为「固化台账」并锁定剩余成员。"""
+    """R4：从台账移除任务 → 无论原为何种类型，均转为「固化台账」并锁定剩余成员。"""
     view = get_saved_view(sdb, space_id, view_id)
     if view.view_mode == "dynamic":
-        # 动态台账无成员表，先按当前命中集固化为成员
         _snapshot_members(sdb, space_id, view, operator)
         sdb.commit()
     now = datetime.now()
@@ -789,11 +1091,7 @@ def remove_members(
 def add_members(
     sdb: Session, space_id: int, view_id: int, task_ids: List[int], operator: str
 ) -> B04SavedView:
-    """补充需求：向台账补充新增任务。
-
-    动态引用台账会先按当前命中集快照为成员并转为「固化台账」，再把指定任务加入成员集合；
-    已存在（含逻辑删除）的成员会被复活，保证幂等。
-    """
+    """补充需求：向台账补充新增任务。"""
     view = get_saved_view(sdb, space_id, view_id)
     now = datetime.now()
     if view.view_mode == "dynamic":
@@ -848,7 +1146,6 @@ def update_saved_view(
         setattr(obj, field, value)
     obj.updated_by = operator
     obj.updated_at = datetime.now()
-    # 模式或筛选条件变化都重建成员（动态模式清空、固化模式重新快照）
     _rebuild_members(sdb, space_id, obj, operator)
     sdb.commit()
     sdb.refresh(obj)
@@ -896,7 +1193,7 @@ def get_saved_view_out(sdb: Session, space_id: int, view_id: int) -> dict:
 
 
 def export_saved_view_tasks(sdb: Session, space_id: int, view_id: int) -> bytes:
-    """导出自定义台账数据（引用原任务）。"""
+    """导出自定义台账数据（引用原任务，按模板字段）。"""
     view = get_saved_view(sdb, space_id, view_id)
     if view.view_mode == "fixed":
         rows = (
@@ -918,7 +1215,9 @@ def export_saved_view_tasks(sdb: Session, space_id: int, view_id: int) -> bytes:
             .order_by(B04Task.id.asc())
             .all()
         )
-    return _tasks_to_xlsx(rows)
+    template = get_template(sdb, space_id)
+    config = template.config_json if template else build_default_template_config()
+    return _build_export_xlsx(sdb, rows, config)
 
 
 def list_saved_view_tasks(
@@ -929,12 +1228,7 @@ def list_saved_view_tasks(
     page_size: int,
     filters: dict = None,
 ) -> Tuple[List[B04Task], int]:
-    """自定义台账数据：
-    - 动态模式：按 filter_config 实时计算（引用原任务）；
-    - 固化模式：从成员表取锁定任务（即使原任务改标签/状态仍保留成员）。
-
-    filters（R2 台账内再筛选，D4）：动态=基础 ∩ 搜索；固化=锁定成员内按搜索过滤（不增删成员）。
-    """
+    """自定义台账数据：动态=按 filter_config 实时；固化=从成员表取锁定任务。"""
     view = get_saved_view(sdb, space_id, view_id)
     filters = _clean_filter_config(filters or {})
     if view.view_mode == "fixed":
@@ -957,3 +1251,76 @@ def list_saved_view_tasks(
     total = q.count()
     rows = q.order_by(B04Task.id.asc()).offset((page - 1) * page_size).limit(page_size).all()
     return rows, total
+
+
+# ── 存量兼容：旧台账 filter_config 自动迁移（决策③） ──
+# 旧键 → 新键；旧枚举值 → 新枚举值（best-effort，无法映射者清空该过滤项）
+_LEGACY_FILTER_KEY_MAP = {
+    "owner": "migration_owner",
+    "schedule_status": "dualrun_status",
+}
+_LEGACY_MIGRATION_STATUS_MAP = {
+    "未开始": "未开始",
+    "改造完成": "已完成",
+    "调度成功": "已完成",
+    "数据校验通过": "已完成",
+    "数据校验不通过": "已完成",
+    "客户验收通过": "已完成",
+    "客户验收不通过": "已完成",
+    "挂起": None,
+    "废弃": None,
+}
+_LEGACY_SCHEDULE_STATUS_MAP = {
+    "未提交": "未调度",
+    "已提交": "调度中",
+    "调度中": "调度中",
+    "调度成功": "调度中",
+    "调度失败": "提交报错",
+}
+_LEGACY_CHECK_STATUS_MAP = {
+    "未校验": None,
+    "校验中": None,
+    "校验通过": "校验通过",
+    "校验不通过": "校验不通过",
+}
+
+
+def migrate_legacy_filter_configs(sdb: Session, space_id: int) -> int:
+    """将 b04_saved_view.filter_config 中旧键/旧枚举值映射为新键/新枚举值。
+
+    返回迁移的台账数量。无法映射的过滤项置空；开发态清空重建场景通常无存量数据。
+    """
+    rows = (
+        sdb.query(B04SavedView)
+        .filter(B04SavedView.space_id == space_id, B04SavedView.deleted_at.is_(None))
+        .all()
+    )
+    migrated = 0
+    for v in rows:
+        cfg = v.filter_config or {}
+        new_cfg = {}
+        for k, val in cfg.items():
+            nk = _LEGACY_FILTER_KEY_MAP.get(k, k)
+            if nk == "migration_status" and val in _LEGACY_MIGRATION_STATUS_MAP:
+                mapped = _LEGACY_MIGRATION_STATUS_MAP[val]
+                if mapped:
+                    new_cfg[nk] = mapped
+            elif nk == "dualrun_status" and val in _LEGACY_SCHEDULE_STATUS_MAP:
+                mapped = _LEGACY_SCHEDULE_STATUS_MAP[val]
+                if mapped:
+                    new_cfg[nk] = mapped
+            elif nk == "check_status" and val in _LEGACY_CHECK_STATUS_MAP:
+                mapped = _LEGACY_CHECK_STATUS_MAP[val]
+                if mapped:
+                    new_cfg[nk] = mapped
+            elif nk in _ALLOWED_FILTER_KEYS:
+                new_cfg[nk] = val
+            # 其它键（如 tag_ids/tag_match）保留
+            elif k in ("tag_ids", "tag_match"):
+                new_cfg[k] = val
+        if new_cfg != cfg:
+            v.filter_config = new_cfg
+            migrated += 1
+    if migrated:
+        sdb.commit()
+    return migrated

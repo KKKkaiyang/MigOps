@@ -1,12 +1,12 @@
 <template>
-  <!-- 任务台账详情：引用原任务数据，可搜索/状态流转/批量操作/移除/补充任务（需求 R2/D2，交互评审 I4/I5） -->
+  <!-- 任务视图详情：引用原任务数据，可搜索/状态流转/批量操作/移除/补充任务（需求 R2/D2，交互评审 I4/I5） -->
   <div class="sv-page">
     <el-card shadow="never">
       <template #header>
         <div class="page-head">
           <div class="head-left">
-            <el-button link type="primary" class="back-btn" @click="goBack">‹ 返回任务台账</el-button>
-            <span class="page-title">{{ view?.name || '任务台账' }}</span>
+            <el-button link type="primary" class="back-btn" @click="goBack">‹ 返回任务视图</el-button>
+            <span class="page-title">{{ view?.name || '任务视图' }}</span>
             <el-tag v-if="view" size="small" :type="view.view_mode === 'fixed' ? 'warning' : 'info'">
               {{ modeLabel }}
             </el-tag>
@@ -15,6 +15,7 @@
           <div class="head-actions">
             <el-button type="primary" @click="addTasksVisible = true">补充任务</el-button>
             <el-button :disabled="!tasks.length" @click="exportTasks">导出</el-button>
+            <el-button @click="templateVisible = true">配置字段模板</el-button>
           </div>
         </div>
       </template>
@@ -53,7 +54,7 @@
           :disabled="!selection.length"
           @click="removeFromLedger"
         >
-          从台账移除
+          从视图移除
         </el-button>
         <el-button :disabled="!selection.length" @click="clearSelection">清除选择</el-button>
       </div>
@@ -78,33 +79,27 @@
         <el-table-column label="任务" min-width="220">
           <template #default="{ row }">
             <div class="task-cell">
-              <span class="mono task-name">{{ row.task_name }}</span>
-              <span v-if="row.script_name" class="task-script mono">{{ row.script_name }}</span>
+              <span class="mono task-name" @click="openDetail(row as TaskOut)">{{ row.task_name }}</span>
             </div>
           </template>
         </el-table-column>
-        <el-table-column prop="workflow_name" label="工作流" width="140">
-          <template #default="{ row }"><span class="mono">{{ row.workflow_name }}</span></template>
-        </el-table-column>
-        <el-table-column prop="owner" label="Owner" width="80" />
-        <el-table-column label="迁移状态" width="150">
-          <template #default="{ row }">
-            <TaskStatusCell
-              :status="row.migration_status"
-              @change="(c: string) => changeStatus(row as TaskOut, c)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="调度状态" width="110">
-          <template #default="{ row }">
-            <ScheduleStatusTag :status="row.schedule_status" />
-          </template>
-        </el-table-column>
-        <el-table-column label="校验状态" width="110">
-          <template #default="{ row }">
-            <CheckStatusTag :status="row.check_status" />
-          </template>
-        </el-table-column>
+        <template v-for="field in tpl.listFields.value" :key="field.field_key">
+          <el-table-column :label="field.field_label" min-width="140">
+            <template #default="{ row }">
+              <TaskStatusCell
+                v-if="tpl.isStatusField(field)"
+                :dimension="field.field_key as StatusDimensionKey"
+                :value="tpl.cellValue(row as TaskOut, field)"
+                @change="(v: string) => changeStatus(row as TaskOut, field.field_key as StatusDimensionKey, v)"
+              />
+              <CheckResultTag
+                v-else-if="field.field_key === 'check_result'"
+                :value="tpl.cellValue(row as TaskOut, field)"
+              />
+              <span v-else class="cell-text">{{ tpl.cellValue(row as TaskOut, field) || '—' }}</span>
+            </template>
+          </el-table-column>
+        </template>
         <el-table-column label="标签" min-width="160">
           <template #default="{ row }">
             <TaskTagCell
@@ -123,7 +118,7 @@
           </template>
         </el-table-column>
         <template #empty>
-          <span class="muted">该台账暂无命中任务</span>
+          <span class="muted">该视图暂无命中任务</span>
         </template>
       </el-table>
 
@@ -150,7 +145,6 @@
       @success="onBatchTagDone"
     />
     <TaskDetailDrawer v-model="detailVisible" :task="detailTask" @changed="load" />
-    <!-- 补充任务：内嵌抽屉，不离开当前页（交互评审 I4） -->
     <AddTasksDrawer
       v-model="addTasksVisible"
       :space-id="spaceId"
@@ -159,22 +153,27 @@
       :view-name="view?.name || ''"
       @added="onTasksAdded"
     />
+    <TemplateConfigDialog
+      v-model="templateVisible"
+      :space-id="spaceId"
+      @saved="onTemplateSaved"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import ScheduleStatusTag from '@/components/common/ScheduleStatusTag.vue'
-import CheckStatusTag from '@/components/common/CheckStatusTag.vue'
 import TaskStatusCell from './components/TaskStatusCell.vue'
+import CheckResultTag from '@/components/common/CheckResultTag.vue'
 import TaskTagCell from './components/TaskTagCell.vue'
 import TaskFilterBar from './components/TaskFilterBar.vue'
 import BatchStatusDialog from './components/BatchStatusDialog.vue'
 import BatchTagDialog from './components/BatchTagDialog.vue'
 import TaskDetailDrawer from './components/TaskDetailDrawer.vue'
 import AddTasksDrawer from './components/AddTasksDrawer.vue'
+import TemplateConfigDialog from './components/TemplateConfigDialog.vue'
 import {
   listSavedViewTasks,
   getSavedView,
@@ -183,8 +182,9 @@ import {
 } from '@/api/task-migration'
 import { downloadFile } from '@/utils/download'
 import { useTagStore } from '@/store/tags'
+import { useTemplate } from '@/composables/useTemplate'
 import { VIEW_MODE_LABEL } from '@/types'
-import type { SavedViewOut, TaskOut } from '@/types'
+import type { SavedViewOut, StatusDimensionKey, TaskOut } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -194,15 +194,17 @@ const viewId = computed(() => Number(route.params.viewId))
 const FILTER_LABELS: Record<string, string> = {
   keyword: '任务名称',
   workflow_name: '工作流',
+  project_name: '项目名称',
+  migration_owner: '迁移负责人',
+  active_status: '任务活跃状态',
   migration_status: '迁移状态',
-  schedule_status: '调度状态',
-  check_status: '校验状态',
-  owner: 'Owner',
+  dualrun_status: '双跑调度状态',
+  check_status: '数据校验状态',
+  acceptance_status: '客户验收状态',
   tag_ids: '标签',
   tag_match: '标签匹配',
 }
 
-/** 标签维度筛选值格式化（tag_ids 为数组时展示数量）。 */
 function formatFilterValue(key: string, value: unknown): string {
   if (key === 'tag_ids' && Array.isArray(value)) return `${value.length} 个标签`
   if (key === 'tag_match') return value === 'any' ? '含任一标签' : '含全部标签'
@@ -211,6 +213,8 @@ function formatFilterValue(key: string, value: unknown): string {
 
 const tagStore = useTagStore()
 const allTags = computed(() => tagStore.tags)
+
+const tpl = useTemplate(spaceId.value)
 
 const view = ref<SavedViewOut | null>(null)
 const tasks = ref<TaskOut[]>([])
@@ -221,25 +225,17 @@ const loading = ref(false)
 const selection = ref<TaskOut[]>([])
 const selectionIds = computed(() => selection.value.map((t) => t.id))
 
-interface TaskFilters {
-  keyword: string
-  workflow_name: string
-  migration_status: string
-  schedule_status: string
-  check_status: string
-  owner: string
-  tag_ids: number[]
-  tag_match: string
-}
-
-const filters = ref<TaskFilters>({
+const filters = reactive<Record<string, any>>({
   keyword: '',
   workflow_name: '',
+  project_name: '',
+  migration_owner: '',
+  active_status: '',
   migration_status: '',
-  schedule_status: '',
+  dualrun_status: '',
   check_status: '',
-  owner: '',
-  tag_ids: [],
+  acceptance_status: '',
+  tag_ids: [] as number[],
   tag_match: 'all',
 })
 
@@ -248,12 +244,14 @@ const batchTagVisible = ref(false)
 const detailVisible = ref(false)
 const detailTask = ref<TaskOut | null>(null)
 const addTasksVisible = ref(false)
+const templateVisible = ref(false)
 
-/** 模式通俗化标签（I5） */
-const modeLabel = computed(() => (view.value ? VIEW_MODE_LABEL[view.value.view_mode] || view.value.view_mode : ''))
+const modeLabel = computed(() =>
+  view.value ? VIEW_MODE_LABEL[view.value.view_mode] || view.value.view_mode : ''
+)
 
 function goBack() {
-  router.push({ name: 'space-ledgers', params: { spaceId: spaceId.value } })
+  router.push({ name: 'space-task-views', params: { spaceId: spaceId.value } })
 }
 
 function clearSelection() {
@@ -265,15 +263,16 @@ async function loadView() {
 }
 
 function buildFilters(): Record<string, unknown> {
-  const f = filters.value
+  const f = filters
   const out: Record<string, unknown> = {}
   if (f.keyword) out.keyword = f.keyword
   if (f.workflow_name) out.workflow_name = f.workflow_name
-  if (f.migration_status) out.migration_status = f.migration_status
-  if (f.schedule_status) out.schedule_status = f.schedule_status
-  if (f.check_status) out.check_status = f.check_status
-  if (f.owner) out.owner = f.owner
-  if (f.tag_ids.length) out.tag_ids = f.tag_ids
+  if (f.project_name) out.project_name = f.project_name
+  if (f.migration_owner) out.migration_owner = f.migration_owner
+  for (const k of ['active_status', 'migration_status', 'dualrun_status', 'check_status', 'acceptance_status']) {
+    if (f[k]) out[k] = f[k]
+  }
+  if (Array.isArray(f.tag_ids) && f.tag_ids.length) out.tag_ids = f.tag_ids
   if (f.tag_match !== 'all') out.tag_match = f.tag_match
   return out
 }
@@ -281,13 +280,7 @@ function buildFilters(): Record<string, unknown> {
 async function load() {
   loading.value = true
   try {
-    const data = await listSavedViewTasks(
-      spaceId.value,
-      viewId.value,
-      page.value,
-      pageSize.value,
-      buildFilters()
-    )
+    const data = await listSavedViewTasks(spaceId.value, viewId.value, page.value, pageSize.value, buildFilters())
     tasks.value = data.list
     total.value = data.total
   } finally {
@@ -301,7 +294,7 @@ function onPage(p: number) {
 }
 
 function onFilterUpdate(payload: { key: string; value: string | number[] }) {
-  ;(filters.value as Record<string, unknown>)[payload.key] = payload.value
+  filters[payload.key] = payload.value
 }
 
 function search() {
@@ -310,23 +303,26 @@ function search() {
 }
 
 function resetFilters() {
-  filters.value = {
+  Object.assign(filters, {
     keyword: '',
     workflow_name: '',
+    project_name: '',
+    migration_owner: '',
+    active_status: '',
     migration_status: '',
-    schedule_status: '',
+    dualrun_status: '',
     check_status: '',
-    owner: '',
+    acceptance_status: '',
     tag_ids: [],
     tag_match: 'all',
-  }
+  })
   page.value = 1
   load()
 }
 
-async function changeStatus(row: TaskOut, status: string) {
-  await updateTaskStatus(spaceId.value, row.id, status)
-  ElMessage.success(`已流转为「${status}」`)
+async function changeStatus(row: TaskOut, dimension: StatusDimensionKey, value: string) {
+  await updateTaskStatus(spaceId.value, row.id, { [dimension]: value })
+  ElMessage.success(`已更新为「${value}」`)
   await load()
 }
 
@@ -339,27 +335,26 @@ async function removeFromLedger() {
   const willConvert = view.value?.view_mode !== 'fixed'
   await ElMessageBox.confirm(
     willConvert
-      ? `将从台账移除选中的 ${selection.value.length} 个任务。此操作会将本台账转为「固定名单」（锁定剩余成员，之后不再自动更新），确认？`
-      : `将从台账移除选中的 ${selection.value.length} 个任务（仅解除成员关系，不删除原任务），确认？`,
-    '从台账移除任务',
+      ? `将从视图移除选中的 ${selection.value.length} 个任务。此操作会将本视图转为「固定名单」（锁定剩余成员，之后不再自动更新），确认？`
+      : `将从视图移除选中的 ${selection.value.length} 个任务（仅解除成员关系，不删除原任务），确认？`,
+    '从视图移除任务',
     { type: 'warning' }
   )
   await removeSavedViewMembers(spaceId.value, viewId.value, selectionIds.value)
-  ElMessage.success(willConvert ? '已移除，台账已转为固定名单' : '已移除')
+  ElMessage.success(willConvert ? '已移除，视图已转为固定名单' : '已移除')
   if (view.value) view.value.view_mode = 'fixed'
   clearSelection()
   await load()
   await loadView()
 }
 
-/** 补充任务完成：刷新台账；若由自动更新转为固定名单，显式告知（I5） */
 async function onTasksAdded() {
   const wasDynamic = view.value?.view_mode !== 'fixed'
   clearSelection()
   await loadView()
   await load()
   if (wasDynamic && view.value?.view_mode === 'fixed') {
-    ElMessage.success('已加入任务，本台账已转为「固定名单」（锁定当前成员，之后不再自动更新）')
+    ElMessage.success('已加入任务，本视图已转为「固定名单」（锁定当前成员，之后不再自动更新）')
   }
 }
 
@@ -375,16 +370,23 @@ function onBatchTagDone() {
   load()
 }
 
+function onTemplateSaved() {
+  templateVisible.value = false
+  tpl.load(true)
+  load()
+}
+
 async function exportTasks() {
   await downloadFile(
     `/b04/saved-views/${viewId.value}/tasks/export`,
     { space_id: spaceId.value },
-    `${view.value?.name ?? '任务台账'}.xlsx`
+    `${view.value?.name ?? '自定义视图'}.xlsx`
   )
 }
 
 onMounted(async () => {
   await tagStore.ensure(spaceId.value)
+  await tpl.load()
   await loadView()
   await load()
 })
@@ -480,15 +482,21 @@ onMounted(async () => {
 .task-name {
   font-size: 13px;
   font-weight: 600;
+  cursor: pointer;
+  color: var(--color-primary);
 }
 
-.task-script {
-  font-size: 11px;
-  color: var(--color-text-muted);
+.task-name:hover {
+  text-decoration: underline;
 }
 
 .mono {
   font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.cell-text {
+  font-size: 13px;
+  color: var(--color-text-regular);
 }
 
 .muted {

@@ -129,6 +129,22 @@
               <circle :r="11" :class="{ done: copied === n.table }"></circle>
               <text text-anchor="middle" dy="3.5" class="copy-glyph">⧉</text>
             </g>
+
+            <!-- D4：节点左下方校验□（仅展示最近 3 个自然日内有校验结果的当日；有几天显示几个） -->
+            <g
+              v-if="nodeCheckSquares(n).length"
+              class="node-check"
+              :transform="`translate(8,${NODE_H - 16})`"
+            >
+              <g
+                v-for="(sq, si) in nodeCheckSquares(n)"
+                :key="si"
+                :transform="`translate(${si * 14},0)`"
+              >
+                <rect width="10" height="10" rx="2" :class="sq.cls"></rect>
+                <title>{{ sq.title }}</title>
+              </g>
+            </g>
           </g>
         </g>
       </g>
@@ -170,6 +186,44 @@
       </div>
       <div class="detail-full" :title="detail.table">{{ detail.table }}</div>
 
+      <!-- 临时表专属：钻取上下文（项目空间 + 工作流 + 任务），可跳转 b04（R2/R3） -->
+      <div v-if="detail.temp && detail.contexts.length" class="detail-ctx">
+        <div class="detail-sec-title">上下文信息（项目空间 · 工作流 · 任务）</div>
+        <div v-for="(c, i) in detail.contexts" :key="'ctx' + i" class="ctx-row">
+          <div class="ctx-item">
+            <span class="ti-label">项目空间</span>
+            <span
+              class="ctx-link"
+              :class="{ disabled: !c.project }"
+              :title="c.project || '（未知）'"
+              @click.stop="c.project && jumpToProject()"
+              >{{ c.project || '（未知）' }}</span
+            >
+          </div>
+          <div class="ctx-item">
+            <span class="ti-label">工作流</span>
+            <span
+              class="ctx-link"
+              :class="{ disabled: !c.workflow }"
+              :title="c.workflow || '（未知）'"
+              @click.stop="c.workflow && jumpToTask(c.workflow, c.task)"
+              >{{ c.workflow || '（未知）' }}</span
+            >
+          </div>
+          <div class="ctx-item">
+            <span class="ti-label">任务</span>
+            <span
+              class="ctx-link"
+              :class="{ disabled: !c.task }"
+              :title="c.task || '（未知）'"
+              @click.stop="c.task && jumpToTask(c.workflow, c.task)"
+              >{{ c.task || '（未知）' }}</span
+            >
+          </div>
+        </div>
+        <div class="ctx-hint">点击工作流 / 任务可跳转至任务迁移对应任务</div>
+      </div>
+
       <div class="detail-tabs">
         <div class="detail-tab" :class="{ active: detailTab === 'write' }" @click="detailTab = 'write'">
           写入任务{{ wfSummary(detail.write).records ? '（' + wfSummary(detail.write).records + '）' : '' }}
@@ -191,7 +245,16 @@
             <ul v-show="isWfOpen(detail, g.workflow + '' + g.script)">
               <li v-for="(it, i) in g.items" :key="i" class="task-item">
                 <div class="ti-detail">
-                  <div><span class="ti-label">任务</span>{{ it.task || '（未知任务）' }}</div>
+                  <div>
+                    <span class="ti-label">任务</span>
+                    <span
+                      class="ti-link"
+                      :class="{ disabled: !it.task }"
+                      :title="it.task || '（未知任务）'"
+                      @click.stop="it.task && emit('open-task', { project: it.project || '', task: it.task })"
+                      >{{ it.task || '（未知任务）' }}</span
+                    >
+                  </div>
                   <div><span class="ti-label">项目</span>{{ it.project || '（未知）' }}</div>
                   <div><span class="ti-label">任务类型</span>{{ it.taskType || '（未知）' }}</div>
                   <div><span class="ti-label">脚本</span><span :title="it.script" @click.stop="copyText(it.script || '')" class="ti-copy">{{ scriptBase(it.script) || '（未知脚本）' }}</span></div>
@@ -216,7 +279,16 @@
             <ul v-show="isWfOpen(detail, g.workflow + '' + g.script)">
               <li v-for="(it, i) in g.items" :key="i" class="task-item">
                 <div class="ti-detail">
-                  <div><span class="ti-label">任务</span>{{ it.task || '（未知任务）' }}</div>
+                  <div>
+                    <span class="ti-label">任务</span>
+                    <span
+                      class="ti-link"
+                      :class="{ disabled: !it.task }"
+                      :title="it.task || '（未知任务）'"
+                      @click.stop="it.task && emit('open-task', { project: it.project || '', task: it.task })"
+                      >{{ it.task || '（未知任务）' }}</span
+                    >
+                  </div>
                   <div><span class="ti-label">项目</span>{{ it.project || '（未知）' }}</div>
                   <div><span class="ti-label">任务类型</span>{{ it.taskType || '（未知）' }}</div>
                   <div><span class="ti-label">脚本</span><span :title="it.script" @click.stop="copyText(it.script || '')" class="ti-copy">{{ scriptBase(it.script) || '（未知脚本）' }}</span></div>
@@ -286,6 +358,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   type LineageGraphData,
   type LineageRec,
@@ -307,7 +380,54 @@ const WS_SEP = ''
 const props = defineProps<{
   focusTable: string
   graph: LineageGraphData
+  /** 当前迁移空间 ID，用于临时表上下文跳转 b04（R3） */
+  spaceId: number
+  /** 血缘节点校验结果（D4）：key 为 `db.table`，value 为按日期降序的校验记录数组 */
+  checkResults?: Record<string, Array<{ data_date: string; result?: string | null; src_volume?: number | null; dst_volume?: number | null }>>
 }>()
+
+const emit = defineEmits<{
+  (e: 'open-task', p: { project: string; task: string }): void
+}>()
+
+/** D4：最近 3 个自然日（T-1 ~ T-3，不含当天），用于节点校验□固定占位（按本地日期，避免 toISOString 的 UTC 偏移） */
+const recent3 = (() => {
+  const out: string[] = []
+  const base = new Date()
+  for (let i = 1; i <= 3; i++) {
+    const d = new Date(base)
+    d.setDate(base.getDate() - i)
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    out.push(`${y}-${m}-${day}`)
+  }
+  return out
+})()
+
+/** D4：节点左下方校验□——仅返回最近 3 个自然日（T-1~T-3）内有校验结果的当日，有几天显示几个 */
+function nodeCheckSquares(n: { table: string }) {
+  const recs = props.checkResults?.[n.table] || []
+  const byDate: Record<string, any> = {}
+  for (const r of recs) byDate[r.data_date] = r
+  const squares: { cls: string; title: string }[] = []
+  for (const date of recent3) {
+    const rec = byDate[date]
+    if (!rec) continue // 无校验结果的当日不展示占位
+    let cls = 'ck-none'
+    if (rec.result === '通过') cls = 'ck-pass'
+    else if (rec.result === '不通过') cls = 'ck-fail'
+    const src = rec.src_volume ?? '—'
+    const dst = rec.dst_volume ?? '—'
+    squares.push({
+      cls,
+      title: `${date}｜源端数据量：${src}｜目标端数据量：${dst}｜结果：${rec.result ?? '—'}`,
+    })
+  }
+  return squares
+}
+
+const router = useRouter()
 
 interface LNode {
   key: string
@@ -365,8 +485,16 @@ interface WfGroup {
   script: string
   items: WfGroupItem[]
 }
+interface DetailContext {
+  project: string
+  workflow: string
+  task: string
+}
 interface DetailData {
   table: string
+  temp: boolean
+  // 临时表专属：按「项目空间 + 工作流 + 任务」去重后的钻取上下文（R2/R3）
+  contexts: DetailContext[]
   write: WfGroup[]
   read: WfGroup[]
   writeCount: number
@@ -465,13 +593,16 @@ const model = computed<{ nodes: LNode[]; links: LLink[]; bounds: { w: number; h:
   }
 
   // 获取当前表在指定方向上的邻居列表：[neighborTable, rec[]]
-  const getNeighbors = (table: string, dir: 'up' | 'down', wsCtx: { workflow: string; script: string } | null): [string, LineageRec[]][] => {
+  // 临时表按「项目空间 + 工作流 + 任务」三元组上下文（pwtCtx）定位；pwtCtx 为空时合并所有上下文
+  const getNeighbors = (table: string, dir: 'up' | 'down', pwtCtx: { project: string; workflow: string; task: string } | null): [string, LineageRec[]][] => {
     if (isTemp(table)) {
       const wsMap = (dir === 'up' ? tempUp : tempDown).get(table)
       if (!wsMap) return []
-      const wsKey = wsCtx ? (wsCtx.workflow || '') + WS_SEP + (wsCtx.script || '') : null
-      if (wsKey !== null) {
-        const nbrMap = wsMap.get(wsKey)
+      const pwtKey = pwtCtx
+        ? (pwtCtx.project || '') + WS_SEP + (pwtCtx.workflow || '') + WS_SEP + (pwtCtx.task || '')
+        : null
+      if (pwtKey !== null) {
+        const nbrMap = wsMap.get(pwtKey)
         if (!nbrMap) return []
         return [...nbrMap.entries()]
       }
@@ -496,40 +627,44 @@ const model = computed<{ nodes: LNode[]; links: LLink[]; bounds: { w: number; h:
     parentKey: string | null,
     inDir: 'up' | 'down' | 'both',
     pathSet: Set<string>,
-    wsContext: { workflow: string; script: string } | null
+    pwtContext: { project: string; workflow: string; task: string } | null
   ) => {
     makeInst(key, table, depth, parentKey, inDir)
     if (openUp.has(key)) {
-      for (const [nb, info] of getNeighbors(table, 'up', wsContext)) {
+      for (const [nb, info] of getNeighbors(table, 'up', pwtContext)) {
         if (pathSet.has(nb)) continue
         const childKey = `${key}::up::${nb}`
-        const childWs = isTemp(nb)
-          ? wsContext || (info[0] && { workflow: info[0].workflow, script: info[0].script }) || null
+        const childCtx = isTemp(nb)
+          ? pwtContext ||
+            (info[0] && { project: info[0].project, workflow: info[0].workflow, task: info[0].task }) ||
+            null
           : null
         if (!childrenOf.has(key)) childrenOf.set(key, [])
         childrenOf.get(key)!.push({ childKey, dir: 'up', edges: info, table: nb })
         const np = new Set(pathSet)
         np.add(nb)
-        expand(childKey, nb, depth - 1, key, 'up', np, childWs)
+        expand(childKey, nb, depth - 1, key, 'up', np, childCtx)
       }
     }
     if (openDown.has(key)) {
-      for (const [nb, info] of getNeighbors(table, 'down', wsContext)) {
+      for (const [nb, info] of getNeighbors(table, 'down', pwtContext)) {
         if (pathSet.has(nb)) continue
         const childKey = `${key}::down::${nb}`
-        const childWs = isTemp(nb)
-          ? wsContext || (info[0] && { workflow: info[0].workflow, script: info[0].script }) || null
+        const childCtx = isTemp(nb)
+          ? pwtContext ||
+            (info[0] && { project: info[0].project, workflow: info[0].workflow, task: info[0].task }) ||
+            null
           : null
         if (!childrenOf.has(key)) childrenOf.set(key, [])
         childrenOf.get(key)!.push({ childKey, dir: 'down', edges: info, table: nb })
         const np = new Set(pathSet)
         np.add(nb)
-        expand(childKey, nb, depth + 1, key, 'down', np, childWs)
+        expand(childKey, nb, depth + 1, key, 'down', np, childCtx)
       }
     }
   }
 
-  // focus 节点展开：临时表入口时 wsContext 为空，getNeighbors 会合并所有 wsKey
+  // focus 节点展开：临时表入口时 pwtContext 为空，getNeighbors 会合并所有三元组上下文
   expand(focus, focus, 0, null, 'both', new Set([focus]), null)
 
   // 树形 y 布局（叶子顺序递增）
@@ -787,6 +922,21 @@ function menuDetail() {
   edgeDetail.value = null
 }
 
+/** R3：临时表上下文跳转 b04 任务迁移（按 工作流 + 任务 过滤定位） */
+function jumpToTask(workflow: string, task: string) {
+  if (!props.spaceId) return
+  router.push({
+    name: 'space-tasks',
+    params: { spaceId: props.spaceId },
+    query: { workflow, task },
+  })
+}
+/** R3：项目空间上下文跳转至空间概览 */
+function jumpToProject() {
+  if (!props.spaceId) return
+  router.push({ name: 'space-overview', params: { spaceId: props.spaceId } })
+}
+
 function showDetail(table: string) {
   const { up, down, tempUp, tempDown } = props.graph
   const isT = isTemp(table)
@@ -807,8 +957,22 @@ function showDetail(table: string) {
     if (d) for (const [nb, recs] of d) for (const r of recs) read.push({ to: nb, workflow: r.workflow, task: r.task, script: r.script || '', taskType: r.taskType, project: r.project })
   }
   detailTab.value = 'write'
+  // 临时表：从写入/读取记录中按「项目空间 + 工作流 + 任务」去重生成钻取上下文（R2/R3）
+  const ctxSet = new Map<string, DetailContext>()
+  if (isT) {
+    const collect = (arr: { project: string; workflow: string; task: string }[]) => {
+      for (const r of arr) {
+        const c: DetailContext = { project: r.project || '', workflow: r.workflow || '', task: r.task || '' }
+        ctxSet.set(`${c.project}${c.workflow}${c.task}`, c)
+      }
+    }
+    collect(write)
+    collect(read)
+  }
   detail.value = {
     table,
+    temp: isT,
+    contexts: isT ? [...ctxSet.values()] : [],
     write: groupByWf(write, 'from', isT),
     read: groupByWf(read, 'to', isT),
     writeCount: write.length,
@@ -1224,6 +1388,33 @@ async function exportPng() {
 .copy-ico circle.done + .copy-glyph {
   fill: #fff;
 }
+
+/* D4：节点左下方校验□（绿=通过 / 红=不通过 / 灰=无记录） */
+.node-check rect.ck-pass {
+  fill: #52c41a;
+  stroke: #52c41a;
+}
+.node-check rect.ck-fail {
+  fill: #f5222d;
+  stroke: #f5222d;
+}
+.node-check rect.ck-none {
+  fill: #e8edf2;
+  stroke: #c2cbd6;
+}
+
+/* 血缘详情内任务名可点击（D5） */
+.ti-link {
+  color: #1a73e8;
+  cursor: pointer;
+}
+.ti-link:hover {
+  text-decoration: underline;
+}
+.ti-link.disabled {
+  color: var(--color-text-regular);
+  cursor: default;
+}
 .toggle {
   cursor: pointer;
 }
@@ -1366,6 +1557,45 @@ async function exportPng() {
   margin: 4px 0 10px;
   word-break: break-all;
   font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.detail-ctx {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  background: #f7faff;
+  border: 1px solid #e3ebf7;
+  border-radius: 8px;
+}
+.ctx-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 4px;
+}
+.ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.ctx-link {
+  color: #1a73e8;
+  cursor: pointer;
+  font-weight: 600;
+  word-break: break-all;
+}
+.ctx-link:hover {
+  text-decoration: underline;
+}
+.ctx-link.disabled {
+  color: #9aa7b5;
+  cursor: default;
+  font-weight: 400;
+  text-decoration: none;
+}
+.ctx-hint {
+  font-size: 11px;
+  color: #9aa7b5;
+  margin-top: 2px;
 }
 .detail-tabs {
   display: flex;

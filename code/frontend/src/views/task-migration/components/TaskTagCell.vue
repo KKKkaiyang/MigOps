@@ -2,15 +2,15 @@
   <!-- 任务标签展示 + 内联添加（需求优化：在标签列直接以 + 号入口添加已有标签） -->
   <span v-if="tags?.length || editable" class="tag-cell">
     <span
-      v-for="t in tags"
+      v-for="t in visibleTags"
       :key="t.id"
       class="tag-pill"
-      :class="{ removable: editable }"
+      :class="{ removable: editable && expanded }"
       :style="pillStyle(t.color)"
     >
       {{ t.name }}
       <button
-        v-if="editable"
+        v-if="editable && expanded"
         type="button"
         class="rm"
         title="移除标签"
@@ -19,6 +19,18 @@
         ×
       </button>
     </span>
+
+    <!-- 溢出折叠：标签数超过阈值时折叠，提供 V 展开 / ^ 收起 切换（D1/D3） -->
+    <button
+      v-if="overflow"
+      type="button"
+      class="fold-toggle"
+      :title="expanded ? '收起' : `展开剩余 ${hiddenCount} 个标签`"
+      @click="expanded = !expanded"
+    >
+      <template v-if="expanded">▲ 收起</template>
+      <template v-else>▼ 展开 {{ hiddenCount }}</template>
+    </button>
 
     <el-popover
       v-if="editable"
@@ -78,24 +90,43 @@ import { ElMessage } from 'element-plus'
 import { setTaskTags } from '@/api/task-migration'
 import type { TagOut, TaskTagBrief } from '@/types'
 
-const props = defineProps<{
-  tags?: TaskTagBrief[]
-  allTags?: TagOut[]
-  spaceId?: number
-  taskId?: number
-  editable?: boolean
-}>()
+const props = withDefaults(
+  defineProps<{
+    tags?: TaskTagBrief[]
+    allTags?: TagOut[]
+    spaceId?: number
+    taskId?: number
+    editable?: boolean
+    /** 折叠阈值：标签数超过该值即折叠（D2，默认 3） */
+    foldThreshold?: number
+  }>(),
+  { foldThreshold: 3 }
+)
 const emit = defineEmits<{ (e: 'updated'): void }>()
 
 const popVisible = ref(false)
 const selectedIds = ref<number[]>([])
 const submitting = ref(false)
+/** 是否已展开全部标签（D3：折叠态 ↔ 展开态双向切换） */
+const expanded = ref(false)
 
 const canAdd = computed(() => !!props.allTags && props.allTags.length > 0)
 const currentIds = computed(() => (props.tags ?? []).map((t) => t.id))
 const candidateTags = computed(() =>
   (props.allTags ?? []).filter((t) => !currentIds.value.includes(t.id))
 )
+
+/** 标签数是否超出阈值（D2） */
+const overflow = computed(() => (props.tags?.length ?? 0) > props.foldThreshold)
+/** 剩余隐藏数量（D3：折叠态展示剩余数量） */
+const hiddenCount = computed(() =>
+  Math.max(0, (props.tags?.length ?? 0) - props.foldThreshold)
+)
+/** 实际渲染的标签：未展开且溢出时仅展示前 N 个（D2/D3） */
+const visibleTags = computed(() => {
+  const list = props.tags ?? []
+  return !expanded.value && overflow.value ? list.slice(0, props.foldThreshold) : list
+})
 
 function pillStyle(color: string): Record<string, string> {
   const c = color || '#1a73e8'
@@ -139,6 +170,27 @@ async function removeTag(t: TaskTagBrief) {
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.fold-toggle {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted, #9aa7b5);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.fold-toggle:hover {
+  color: var(--color-primary, #1a73e8);
+  background: var(--color-primary-light, #eef4ff);
 }
 
 .tag-pill {

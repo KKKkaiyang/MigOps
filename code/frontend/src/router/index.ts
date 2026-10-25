@@ -7,12 +7,15 @@ import SpaceLayout from '@/views/space/SpaceLayout.vue'
 import SpaceOverview from '@/views/space/SpaceOverview.vue'
 import MaterialList from '@/views/material/MaterialList.vue'
 import DataMigrationList from '@/views/data-migration/DataMigrationList.vue'
+import DataCheckList from '@/views/data-check/DataCheckList.vue'
 import TaskMigrationList from '@/views/task-migration/TaskMigrationList.vue'
-import SavedViewList from '@/views/task-migration/SavedViewList.vue'
-import LedgerList from '@/views/task-migration/LedgerList.vue'
+import CustomViewList from '@/views/task-migration/CustomViewList.vue'
+import TaskViewList from '@/views/task-migration/TaskViewList.vue'
 import LineageView from '@/views/lineage/LineageView.vue'
 import TagManage from '@/views/tag/TagManage.vue'
 import UserList from '@/views/user/UserList.vue'
+import SkillMarket from '@/views/skill/SkillMarket.vue'
+import ProfileCenter from '@/views/profile/ProfileCenter.vue'
 
 const routes = [
   {
@@ -59,18 +62,25 @@ const routes = [
         meta: { title: '任务迁移', module: 'b04' },
       },
       {
-        // 任务台账清单（收纳为任务迁移子导航，路由统一 tasks/ledgers，交互评审 I6）
-        path: 'tasks/ledgers',
-        name: 'space-ledgers',
-        component: LedgerList,
-        meta: { title: '任务台账', module: 'b04' },
+        // 数据校验（b05）：校验结果导入 + 校验概览（最新/近7天）
+        path: 'data-checks',
+        name: 'space-data-checks',
+        component: DataCheckList,
+        meta: { title: '数据校验', module: 'b05' },
       },
       {
-        // 台账详情（与清单同层级前缀）
-        path: 'tasks/ledgers/:viewId',
-        name: 'space-saved-view',
-        component: SavedViewList,
-        meta: { title: '任务台账', module: 'b04' },
+        // 任务视图清单（原「任务台账」，2026-10-25 重构更名为任务视图；交互评审 I6）
+        path: 'tasks/views',
+        name: 'space-task-views',
+        component: TaskViewList,
+        meta: { title: '任务视图', module: 'b04' },
+      },
+      {
+        // 自定义视图详情（原「自定义台账」）
+        path: 'tasks/views/:viewId',
+        name: 'space-custom-view',
+        component: CustomViewList,
+        meta: { title: '任务视图', module: 'b04' },
       },
       {
         // 标签管理（收纳为任务迁移子导航）
@@ -92,6 +102,18 @@ const routes = [
     name: 'user-list',
     component: UserList,
     meta: { title: '用户管理', module: 'common', requireL0: true },
+  },
+  {
+    path: '/b08/skills',
+    name: 'skill-market',
+    component: SkillMarket,
+    meta: { title: 'skill 市场', module: 'b08' },
+  },
+  {
+    path: '/profile',
+    name: 'profile',
+    component: ProfileCenter,
+    meta: { title: '个人中心' },
   },
 ]
 

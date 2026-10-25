@@ -29,7 +29,12 @@
 
     <!-- 图区 -->
     <main class="lv-body">
-      <LineageGraph :graph="graphData" :focus-table="focusTable" />
+      <LineageGraph
+        :graph="graphData"
+        :focus-table="focusTable"
+        :space-id="spaceId"
+        :check-results="checkResults"
+      />
     </main>
 
     <!-- 工作流管理抽屉 -->
@@ -66,6 +71,7 @@ import LineageGraph from './components/LineageGraph.vue'
 import SearchBar from './components/SearchBar.vue'
 import WorkflowDialog from './components/WorkflowDialog.vue'
 import { deleteWorkflow, listLineages, listWorkflows } from '@/api/lineage'
+import { getCheckResultsByTables } from '@/api/data-check'
 import { buildGraph, type BuildEdge, type LineageGraphData } from '@/utils/lineage-graph'
 import type { LineageOut, LineageWorkflowOut } from '@/types'
 
@@ -76,6 +82,8 @@ const edges = ref<LineageOut[]>([])
 const workflows = ref<LineageWorkflowOut[]>([])
 const focusTable = ref<string>('')
 const loading = ref(false)
+// D4：血缘节点校验□数据（key = db.table）；与 LineageDialog 一致，独立页也需拉取
+const checkResults = ref<Record<string, Array<{ data_date: string; result?: string | null; src_volume?: number | null; dst_volume?: number | null }>>>({})
 
 const manageOpen = ref(false)
 const wfVisible = ref(false)
@@ -119,6 +127,13 @@ async function reload() {
     workflows.value = wf
     // 由任务详情「查看血缘」携带 table 参数跳入时，预置聚焦表（交互评审 I7）
     if (route.query.table) focusTable.value = String(route.query.table)
+    // D4：拉取本空间全部节点表的最近校验结果，供血缘节点□渲染（非关键取数）。
+    // 省略 tables 参数：后端直接返回本空间全部表的最近 N 天结果，避免整图超长 URL 被拒。
+    try {
+      checkResults.value = (await getCheckResultsByTables(spaceId.value)).tables
+    } catch {
+      checkResults.value = {}
+    }
   } catch {
     /* 错误提示由拦截器统一处理 */
   } finally {

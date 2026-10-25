@@ -36,7 +36,12 @@
           <el-table-column type="selection" width="42" />
           <el-table-column label="库表" min-width="200">
             <template #default="{ row }">
-              <span class="mono">{{ row.db_name }}.{{ row.table_name }}</span>
+              <el-button
+                link
+                type="primary"
+                class="mono"
+                @click="openLineage(`${row.db_name}.${row.table_name}`)"
+              >{{ row.db_name }}.{{ row.table_name }}</el-button>
             </template>
           </el-table-column>
           <el-table-column label="目标库表" min-width="180">
@@ -126,6 +131,9 @@
       :scenario-id="scenarioId ?? 0"
       @success="load"
     />
+
+    <!-- 数据血缘弹层（B03-01：库表点击查看血缘，固定根表可钻取） -->
+    <LineageDialog v-model="lineageVisible" :space-id="spaceId" :focus-table="lineageFocus" />
   </div>
 </template>
 
@@ -140,6 +148,7 @@ import ItemFormDialog from './components/ItemFormDialog.vue'
 import BatchStatusDialog from './components/BatchStatusDialog.vue'
 import RecordDrawer from './components/RecordDrawer.vue'
 import ImportDialog from './components/ImportDialog.vue'
+import LineageDialog from '@/views/lineage/components/LineageDialog.vue'
 import {
   deleteTableItem,
   listTableItems,
@@ -177,6 +186,10 @@ const recordVisible = ref(false)
 const recordItem = ref<TableItemOut | null>(null)
 const importVisible = ref(false)
 const importKind = ref<'items' | 'records'>('items')
+
+// 数据血缘弹层（B03-01）
+const lineageVisible = ref(false)
+const lineageFocus = ref('')
 
 async function load() {
   if (!scenarioId.value) return
@@ -258,6 +271,12 @@ function openRecords(row: TableItemOut) {
 function openImport(kind: 'items' | 'records') {
   importKind.value = kind
   importVisible.value = true
+}
+
+/** 点击库表打开血缘弹层（固定根表，可上下钻取） */
+function openLineage(table: string) {
+  lineageFocus.value = table
+  lineageVisible.value = true
 }
 
 async function exportItems() {

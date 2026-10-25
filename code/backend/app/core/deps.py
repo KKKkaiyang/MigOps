@@ -8,7 +8,7 @@
 
 from typing import Generator, List, Optional
 
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -52,6 +52,50 @@ def get_current_user(
 
 def list_user_roles(db: Session, user_id: int) -> List[CommonUserRole]:
     return db.query(CommonUserRole).filter(CommonUserRole.user_id == user_id).all()
+
+
+async def get_actor(request: Request, db: Session = Depends(get_db)) -> CommonUser:
+    """统一鉴权依赖：优先 ak/sk 签名，其次 Bearer Token。
+
+    同一套端点同时服务网页（登录态）与 REST API（ak/sk），满足需求 D3。
+    """
+    access_key = request.headers.get("X-Access-Key")
+    if access_key:
+        from app.services.api_key import verify_signature
+
+        return verify_signature(
+            db,
+            access_key,
+            request.method,
+            request.url.path,
+            request.headers.get("X-Timestamp"),
+            request.headers.get("X-Nonce"),
+            request.headers.get("X-Signature"),
+        )
+    # 回退到 Bearer Token
+    auth = request.headers.get("Authorization")
+    if not auth or not auth.lower().startswith("bearer "):
+        raise UnauthorizedError()
+    payload = decode_access_token(auth[7:])
+    user_id = payload.get("sub")
+    if not user_id:
+        raise UnauthorizedError()
+    user = (
+        db.query(CommonUser)
+        .filter(CommonUser.id == int(user_id), CommonUser.deleted_at.is_(None))
+        .first()
+    )
+    if not user:
+        raise UnauthorizedError()
+    if user.status != USER_STATUS_ENABLED:
+        raise ForbiddenError("账号已停用，请联系管理员")
+    return user
+
+
+def require_self_or_l0(db: Session, user: CommonUser, owner_user_id: int) -> None:
+    """资源归属校验：本人或 L0 系统管理员可操作，否则 403。"""
+    if user.id != owner_user_id and not is_l0(db, user):
+        raise ForbiddenError("仅作者本人或系统管理员可操作")
 
 
 def is_l0(db: Session, user: CommonUser) -> bool:

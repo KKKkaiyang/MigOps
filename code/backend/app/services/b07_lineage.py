@@ -57,6 +57,87 @@ def list_lineages(
     return q.order_by(B07Lineage.id.asc()).all()
 
 
+def parse_task_uri(task_uri: str) -> tuple[Optional[str], Optional[str]]:
+    """从 task_uri（格式 `space_name://task_name@workflow_name`）解析出 (task_name, workflow_name)。
+
+    解析失败（格式不符）时返回 (None, None)，由调用方决定降级处理。
+    """
+    if not task_uri:
+        return (None, None)
+    right = task_uri.split("://", 1)[1] if "://" in task_uri else task_uri
+    if "@" in right:
+        task_name, workflow_name = right.rsplit("@", 1)
+    else:
+        task_name, workflow_name = right, None
+    return (task_name or None, workflow_name or None)
+
+
+def _aggregate_task_tables(rows: List[B07Lineage]) -> dict:
+    """将一组血缘边聚合为去重的输入/输出表清单（含表类型）。
+
+    返回 {input_tables: [TableRef], output_tables: [TableRef]}。
+    """
+    result: dict = {"input_tables": [], "output_tables": []}
+    seen_in, seen_out = set(), set()
+    for r in rows:
+        if r.input_table and (r.input_table, r.input_table_type) not in seen_in:
+            seen_in.add((r.input_table, r.input_table_type))
+            result["input_tables"].append(
+                {"table": r.input_table, "type": r.input_table_type}
+            )
+        if r.output_table and (r.output_table, r.output_table_type) not in seen_out:
+            seen_out.add((r.output_table, r.output_table_type))
+            result["output_tables"].append(
+                {"table": r.output_table, "type": r.output_table_type}
+            )
+    return result
+
+
+def get_lineages_by_project_task(
+    sdb: Session, space_id: int, dw_project_space: str, task_name: str
+) -> dict:
+    """按（数仓项目空间 + 任务名称）聚合该任务的输入/输出表清单（去重，跨工作流合并）。
+
+    关联键：b07_lineage.project_name = dw_project_space AND b07_lineage.task_name = task_name，
+    不限 workflow_name（同一数仓项目空间内同名任务跨工作流合并）；临时表一并返回、由前端按类型过滤。
+    返回 {input_tables: [TableRef], output_tables: [TableRef]}，无记录时返回空清单。
+    """
+    rows = (
+        sdb.query(B07Lineage)
+        .filter(
+            B07Lineage.space_id == space_id,
+            B07Lineage.project_name == dw_project_space,
+            B07Lineage.task_name == task_name,
+            B07Lineage.deleted_at.is_(None),
+        )
+        .all()
+    )
+    return _aggregate_task_tables(rows)
+
+
+def get_lineages_by_task_uri(
+    sdb: Session, space_id: int, task_uri: str
+) -> dict:
+    """兼容旧调用：按 task_uri 解析出的 (task_name, workflow_name) 聚合输入/输出表清单（去重）。
+
+    新版主路径为 get_lineages_by_project_task（数仓项目空间 + 任务名称），本函数仅作过渡兼容。
+    """
+    task_name, workflow_name = parse_task_uri(task_uri)
+    if not task_name or not workflow_name:
+        return {"input_tables": [], "output_tables": []}
+    rows = (
+        sdb.query(B07Lineage)
+        .filter(
+            B07Lineage.space_id == space_id,
+            B07Lineage.task_name == task_name,
+            B07Lineage.workflow_name == workflow_name,
+            B07Lineage.deleted_at.is_(None),
+        )
+        .all()
+    )
+    return _aggregate_task_tables(rows)
+
+
 def get_lineage(sdb: Session, space_id: int, lineage_id: int) -> B07Lineage:
     obj = (
         sdb.query(B07Lineage)

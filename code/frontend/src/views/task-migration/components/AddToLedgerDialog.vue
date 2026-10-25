@@ -1,23 +1,23 @@
 <template>
-  <!-- 勾选任务加入已有台账（目标台账在对话框内选择） -->
+  <!-- 勾选任务加入已有视图（目标视图在对话框内选择） -->
   <el-dialog
     v-model="visible"
-    title="添加到台账"
+    title="添加到视图"
     width="460px"
     :close-on-click-modal="false"
   >
     <div class="hint">
-      将选中的 <b>{{ taskIds.length }}</b> 个任务加入目标台账。
+      将选中的 <b>{{ taskIds.length }}</b> 个任务加入目标视图。
       <span v-if="targetIsDynamic" class="warn">
-        该台账为「自动更新」类型，加入后将转为「固定名单」。
+        该视图为「自动更新」类型，加入后将转为「固定名单」。
       </span>
     </div>
 
     <el-form label-width="72px">
-      <el-form-item label="目标台账" required>
+      <el-form-item label="目标视图" required>
         <el-select
           v-model="viewId"
-          placeholder="选择要加入的台账"
+          placeholder="选择要加入的视图"
           filterable
           style="width: 100%"
         >
@@ -34,7 +34,7 @@
     <template #footer>
       <el-button @click="visible = false">取消</el-button>
       <el-button type="primary" :loading="submitting" :disabled="!viewId" @click="submit">
-        加入台账
+        加入视图
       </el-button>
     </template>
   </el-dialog>
@@ -94,7 +94,7 @@ async function submit() {
   submitting.value = true
   try {
     await addSavedViewMembers(spaceId.value, viewId.value, props.taskIds)
-    ElMessage.success('已加入台账')
+    ElMessage.success('已加入视图')
     visible.value = false
     emit('success', viewId.value)
   } finally {

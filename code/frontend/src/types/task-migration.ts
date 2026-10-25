@@ -1,22 +1,6 @@
-// 任务迁移管理（b04）类型定义，与后端 Pydantic Schema 对齐
+// 任务迁移管理（b04）类型定义，与后端 Pydantic Schema 对齐（需求 D1~D7 重塑）
 
-/** 任务迁移状态（BRD 4.2 状态机） */
-export type TaskMigrationStatus =
-  | '未开始'
-  | '改造完成'
-  | '调度成功'
-  | '数据校验通过'
-  | '数据校验不通过'
-  | '客户验收通过'
-  | '客户验收不通过'
-  | '挂起'
-  | '废弃'
-
-/** 调度状态 */
-export type ScheduleStatus = '未提交' | '已提交' | '调度中' | '调度成功' | '调度失败'
-
-/** 数据校验状态 */
-export type CheckStatus = '未校验' | '校验中' | '校验通过' | '校验不通过'
+import type { TaskCheckResult } from './data-check'
 
 /** 排查备注类型 */
 export type NoteKind = 'troubleshoot' | 'check_result'
@@ -56,21 +40,28 @@ export interface TaskTagBrief {
   color: string
 }
 
-/** 任务台账 */
+/** 任务视图（基础表 + 扩展字段 ext: f_n → 值） */
 export interface TaskOut {
   id: number
   scenario_id: number
-  workflow_name: string
+  project_name: string
+  workflow_name?: string | null
   task_name: string
-  script_name?: string | null
-  owner?: string | null
+  env: string
+  business?: string | null
+  task_type?: string | null
+  migration_owner: string
+  active_status: string
+  migration_status: string
+  dualrun_status: string
+  check_status?: string | null
+  acceptance_status?: string | null
+  /** 数据校验结果：通过/不通过/无校验结果（b05 校验结果导入后按血缘输出表刷新） */
+  check_result?: TaskCheckResult | string | null
+  remark?: string | null
   task_uri: string
-  migration_status: TaskMigrationStatus | string
-  schedule_status: ScheduleStatus | string
-  check_status: CheckStatus | string
-  input_tables?: string | null
-  output_tables?: string | null
-  latest_note?: string | null
+  /** 扩展字段：系统列名 f_1..f_n → 值 */
+  ext: Record<string, string>
   tags?: TaskTagBrief[]
   updated_by?: string | null
   updated_at?: string | null
@@ -88,7 +79,7 @@ export interface TaskNoteOut {
   created_at?: string
 }
 
-/** 自定义台账（保存的筛选视图） */
+/** 自定义视图（保存的筛选视图） */
 export interface SavedViewOut {
   id: number
   scenario_id: number
@@ -103,63 +94,93 @@ export interface SavedViewOut {
   created_at?: string
 }
 
-/** 台账模式通俗化标签（交互评审 I5：避免向用户暴露 view_mode 实现术语） */
+/** 台账模式通俗化标签 */
 export const VIEW_MODE_LABEL: Record<string, string> = {
   dynamic: '自动更新',
   fixed: '固定名单',
 }
 
-/** 台账模式通俗化说明（创建引导与详情提示共用） */
+/** 台账模式通俗化说明 */
 export const VIEW_MODE_NOTE: Record<string, string> = {
   dynamic: '名单随筛选条件实时变化：任务改标签/状态后自动移出或加入',
   fixed: '保存时锁定当前任务名单，之后任务变化不影响成员；状态变更仍回写原任务',
 }
 
-/** 状态机：当前状态 → 可流转目标（与后端 TASK_STATUS_TRANSITIONS 对齐） */
-export const TASK_STATUS_TRANSITIONS: Record<string, TaskMigrationStatus[]> = {
-  未开始: ['改造完成', '挂起', '废弃'],
-  改造完成: ['调度成功', '挂起', '废弃'],
-  调度成功: ['数据校验通过', '数据校验不通过', '挂起', '废弃'],
-  数据校验通过: ['客户验收通过', '客户验收不通过', '挂起', '废弃'],
-  数据校验不通过: ['数据校验通过', '调度成功', '挂起', '废弃'],
-  客户验收通过: ['挂起', '废弃'],
-  客户验收不通过: ['数据校验通过', '数据校验不通过', '调度成功', '挂起', '废弃'],
-  挂起: [
-    '未开始',
-    '改造完成',
-    '调度成功',
-    '数据校验通过',
-    '数据校验不通过',
-    '客户验收不通过',
-    '废弃',
-  ],
-  废弃: [],
+/** 空间级迁移模板：字段定义 */
+export interface MigrationTemplateField {
+  field_key: string // 基础表字段名 或 扩展字段序号 ext_1
+  field_label: string // 中文显示名（扩展字段中文名在此定义）
+  field_source: 'base' | 'extension'
+  is_required: boolean
+  display_in_list: boolean
+  order: number
+  ext_type?: 'enum' | 'string' | null
+  enum_options?: { code: string; label: string }[] | null
 }
 
-/** 迁移状态筛选项 */
-export const TASK_MIGRATION_STATUS_OPTIONS: TaskMigrationStatus[] = [
-  '未开始',
-  '改造完成',
-  '调度成功',
-  '数据校验通过',
-  '数据校验不通过',
-  '客户验收通过',
-  '客户验收不通过',
-  '挂起',
-  '废弃',
-]
+/** 空间级迁移模板 config_json */
+export interface MigrationTemplateConfig {
+  fields: MigrationTemplateField[]
+}
 
-/** 调度状态筛选项 */
-export const SCHEDULE_STATUS_OPTIONS: ScheduleStatus[] = [
-  '未提交',
-  '已提交',
-  '调度中',
-  '调度成功',
-  '调度失败',
-]
+/** 空间级迁移模板 */
+export interface MigrationTemplateOut {
+  id: number
+  space_id: number
+  name: string
+  config_json: MigrationTemplateConfig
+  created_by?: string | null
+  created_at?: string
+  updated_by?: string | null
+  updated_at?: string
+}
 
-/** 校验状态筛选项 */
-export const CHECK_STATUS_OPTIONS: CheckStatus[] = ['未校验', '校验中', '校验通过', '校验不通过']
+/** 5 维状态维度键 */
+export type StatusDimensionKey =
+  | 'active_status'
+  | 'migration_status'
+  | 'dualrun_status'
+  | 'check_status'
+  | 'acceptance_status'
+
+/** 5 维状态独立更新入参（仅传需更新维度，互不约束） */
+export interface TaskStatusIn {
+  active_status?: string | null
+  migration_status?: string | null
+  dualrun_status?: string | null
+  check_status?: string | null
+  acceptance_status?: string | null
+}
+
+/** 批量更新某一维度状态 */
+export interface TaskBatchStatusPayload {
+  ids: number[]
+  dimension: StatusDimensionKey
+  value: string
+}
+
+/** 空间级迁移模板保存入参 */
+export interface MigrationTemplateUpsert {
+  name: string
+  config_json: MigrationTemplateConfig
+}
 
 /** 导入模式 */
 export type TaskImportMode = 'overwrite' | 'incremental'
+
+/** 任务视图筛选条件（5 维状态 + 项目/负责人 + 扩展字段） */
+export interface TaskListFilters {
+  keyword?: string
+  workflow_name?: string
+  project_name?: string
+  migration_owner?: string
+  active_status?: string
+  migration_status?: string
+  dualrun_status?: string
+  check_status?: string
+  acceptance_status?: string
+  tag_ids?: number[]
+  tag_match?: 'all' | 'any'
+  /** 扩展字段筛选：{f_1: value} */
+  ext?: Record<string, string>
+}

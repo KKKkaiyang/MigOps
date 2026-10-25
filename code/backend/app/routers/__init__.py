@@ -6,6 +6,8 @@ from app.routers import (
     b05_data_check,
     b06_tag,
     b07_lineage,
+    b08_skill,
+    common_api_key,
     common_auth,
     common_user,
 )
@@ -13,6 +15,7 @@ from app.routers import (
 all_routers = [
     common_auth.router,
     common_user.router,
+    common_api_key.router,
     b01_space.router,
     b02_material.router,
     b03_data_migration.router,
@@ -20,4 +23,5 @@ all_routers = [
     b05_data_check.router,
     b06_tag.router,
     b07_lineage.router,
+    b08_skill.router,
 ]

@@ -59,8 +59,16 @@ def init_space_schema(space_code: str, space_id: int) -> str:
     with session_cls() as sdb:
         # 局部导入避免模块初始化顺序依赖
         from app.services.b02_material import seed_preset_categories
+        from app.services.b04_task_migration import (
+            migrate_legacy_filter_configs,
+            seed_default_template,
+        )
 
         seed_preset_categories(sdb, space_id)
+        # b04 任务迁移：注入默认迁移模板（保证存量/新空间均可导入，决策③）
+        seed_default_template(sdb, space_id, operator="system")
+        # 存量兼容：旧台账 filter_config 自动迁移为新字段名/枚举（决策③）
+        migrate_legacy_filter_configs(sdb, space_id)
     return db_name
 
 

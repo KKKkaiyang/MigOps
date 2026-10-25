@@ -87,3 +87,17 @@ class LineageWorkflowOut(BaseModel):
     name: str
     count: int = 0
     focus: Optional[str] = None
+
+
+class TableRef(BaseModel):
+    """血缘关联表引用（含表类型）。"""
+
+    table: str
+    type: Optional[str] = None
+
+
+class LineageByTaskOut(BaseModel):
+    """按任务（task_uri）聚合出的输入/输出表清单（去重）。"""
+
+    input_tables: List[TableRef] = []
+    output_tables: List[TableRef] = []
